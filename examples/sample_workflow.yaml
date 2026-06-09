@@ -1,0 +1,15 @@
+name: lead_intake
+steps:
+  - id: parse_input
+    task: parse_text
+    retries: 3
+  - id: classify
+    task: classify_with_llm
+    depends_on:
+      - parse_input
+    retries: 2
+  - id: notify
+    task: send_notification
+    depends_on:
+      - classify
+    retries: 1

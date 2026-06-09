@@ -1,0 +1,28 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# IDE / Editor Settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project files / caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+dist/
+build/
+*.egg-info/
