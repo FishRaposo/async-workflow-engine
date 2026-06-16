@@ -31,15 +31,40 @@ This document records the key architectural choices made during the development 
 - **Choice**: Option 3 (YAML).
 - **Tradeoff**: YAML is familiar to anyone who has written a `docker-compose.yml` or GitHub Actions workflow. It's concise enough for small DAGs and supports inline comments for documentation. The downside is that YAML has well-known parsing pitfalls (indentation sensitivity, implicit type coercion like `yes` → `True`), but `yaml.safe_load()` combined with Pydantic validation in `WorkflowConfig` catches structural errors early. Using YAML also means workflows are data, not code—they can be stored in a database, version-controlled as config files, or submitted via API without running arbitrary Python.
 
-## Decision 4: In-Process DAG Executor vs. Celery Task Chains
+## Decision 4: In-Process DAG Executor with Celery Dispatch at the Run Level
 
-- **Context**: The workflow engine needs to execute multi-step DAGs with dependency ordering. Celery provides `chain()`, `group()`, and `chord()` primitives for task orchestration. Alternatively, the executor can manage DAG resolution in-process.
+- **Context**: The workflow engine needs to execute multi-step DAGs with dependency ordering. Celery provides `chain()`, `group()`, and `chord()` primitives for per-task orchestration. Alternatively, the executor can manage DAG resolution in-process and Celery can dispatch whole *runs*.
 - **Options**:
-  1. **Celery primitives** — Model workflows as Celery chains/chords, let Celery handle ordering and retry.
-  2. **In-process executor** — `WorkflowExecutor` class manages dependency resolution, task dispatch, and status tracking in a single synchronous loop.
-  3. **Hybrid** — In-process DAG resolution with Celery dispatch for individual tasks.
-- **Choice**: Option 2 for MVP, with migration path to Option 3.
-- **Tradeoff**: The in-process executor is dramatically simpler to debug, test, and reason about. The entire execution flow is visible in a single `execute()` method—no distributed state to chase across broker queues. Deadlock detection is a simple loop condition check. The cost is that execution blocks the API request thread and cannot scale horizontally. For showcase purposes, this tradeoff is acceptable: the system demonstrates DAG resolution mechanics clearly, and the `worker.py` Celery scaffold proves the author knows how to integrate distributed dispatch when needed. The migration path is clear: replace `task_fn()` calls in the executor with `celery_app.send_task()` calls and poll for results.
+  1. **Celery primitives** — Model each workflow as a Celery chain/chord; let Celery handle step ordering and retry.
+  2. **In-process executor, sync only** — `WorkflowExecutor` resolves the DAG in a single loop in the request thread.
+  3. **In-process executor + run-level Celery dispatch** — The executor owns DAG resolution; a Celery task (`run_workflow_task`) runs the *entire* workflow in the background.
+- **Choice**: Option 3.
+- **Tradeoff**: Keeping DAG resolution in-process means the whole execution flow lives in one `execute()` method — trivial to debug and test, with deadlock detection as a simple loop condition. Pushing the *run* (not each step) onto Celery gets background execution and horizontal scaling without scattering DAG state across broker queues, and keeps retries/branching/DLQ logic in one place. `runner.run_workflow()` is shared verbatim by the synchronous API path and the Celery worker, so the two paths can never diverge. The cost: a single run does not parallelize its independent steps across workers (they run in dependency order within one process). That is an explicit, documented limitation with a clear upgrade path (Option 1/parallel fan-out) if throughput-per-run ever matters.
+
+## Decision 8: PostgreSQL Persistence by Default with In-Memory Fallback
+
+- **Context**: Runs should be durable (a dashboard needs history, rerun needs the original definition), but tests, demos, and offline development must work with no database.
+- **Options**:
+  1. In-memory only (simple, but loses history and can't be a real service).
+  2. PostgreSQL required (durable, but breaks offline/test/demo flows).
+  3. Probe the DB at startup; use PostgreSQL when reachable, fall back to in-memory otherwise.
+- **Choice**: Option 3, mirroring the `db_available` probe pattern used across the migrated portfolio services.
+- **Tradeoff**: `db.probe_database()` runs a cheap `SELECT 1` (with a 2s connect timeout so it fails fast) and caches `db_available`; `get_storage()` returns `DatabaseWorkflowStorage` or `InMemoryWorkflowStorage` accordingly. Both backends expose the *same* method surface, so the rest of the system is oblivious to which is active. The cost is two code paths to keep in sync — addressed by a shared test suite (`test_runner.py` exercises both) and a `MockDatabase`-backed `test_storage_db.py` that runs the real SQLAlchemy path on in-memory SQLite.
+
+## Decision 9: Conditional Branching via Declared Conditions, Not Code
+
+- **Context**: Real workflows need to route — notify sales only if a lead is classified `business`, quarantine only if `spam`. Conditions must stay declarative (workflows are data, not code).
+- **Options**:
+  1. Embed Python/expression strings in YAML and `eval` them (powerful, unsafe).
+  2. A small, typed condition object (`step` + one of `equals`/`contains`/`not_equals`).
+- **Choice**: Option 2 (`StepCondition`).
+- **Tradeoff**: A typed condition keeps the safe-by-construction property (no `eval`, no arbitrary code) and is trivial to validate and render in a UI. A non-matching step is marked `SKIPPED` and counts as *resolved*, so downstream steps don't deadlock waiting on it. The condition's source step is treated as an implicit dependency so ordering and cycle detection stay correct. The cost is limited expressiveness (no boolean composition yet) — a deliberate trade for safety and clarity.
+
+## Decision 10: A Dead-Letter Queue Instead of Aborting the Run
+
+- **Context**: When a step exhausts its retries, the run shouldn't simply 500 and lose the failure context.
+- **Choice**: Failed steps are recorded in the executor's `dead_letters` list (task, error, attempts, params) and persisted on the run (`dead_letters` JSON column / in-memory field). The run completes with `overall_status = "failed"` rather than raising.
+- **Tradeoff**: Independent branches still complete, and operators get a queryable record (`GET /workflows/dead-letters`) plus a one-call rerun (`POST /workflows/{id}/rerun`). The cost is that a partial failure returns HTTP 200 with `status: "failed"` — callers must inspect the body, the same contract as the graceful-degradation health check.
 
 ## Decision 5: Task Registry Pattern
 

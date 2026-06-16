@@ -1,8 +1,8 @@
-.PHONY: install dev test lint format typecheck docker-up docker-down demo clean
+.PHONY: install dev test lint format typecheck docker-up docker-down demo migrate worker clean
 
 install:
-	pip install -e ../shared-core
-	pip install -r requirements.txt
+	pip install -e ../shared-core[dev,docparse,embeddings]
+	pip install -e ".[dev]"
 
 dev:
 	python src/workflow_engine/main.py
@@ -11,10 +11,10 @@ test:
 	pytest
 
 lint:
-	ruff check .
+	ruff check src/workflow_engine tests examples alembic
 
 format:
-	ruff format .
+	ruff format src/workflow_engine tests examples alembic
 
 typecheck:
 	pyright src/
@@ -24,6 +24,12 @@ docker-up:
 
 docker-down:
 	docker compose down
+
+migrate:
+	alembic upgrade head
+
+worker:
+	celery -A workflow_engine.worker.celery_app worker --loglevel=info
 
 demo:
 	python examples/run_demo.py

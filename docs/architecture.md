@@ -10,12 +10,19 @@ The engine is intentionally built from first principles—no Airflow, no Prefect
 
 | Module | Responsibility | Key Exports |
 |--------|---------------|-------------|
-| `main.py` | HTTP interface, dependency wiring, health checks | `app` (FastAPI), `run_workflow()`, `health_check()` |
-| `parser.py` | YAML deserialization and schema validation | `WorkflowConfig`, `StepConfig`, `load_workflow_yaml()` |
-| `executor.py` | DAG traversal, topological execution, deadlock detection | `WorkflowExecutor` |
-| `tasks.py` | Task function definitions and registry | `TASK_REGISTRY`, `parse_text()`, `classify_with_llm()`, `send_notification()` |
-| `storage.py` | Workflow run persistence (in-memory stub) | `InMemoryWorkflowStorage` |
-| `worker.py` | Celery app and background task scaffold | `celery_app`, `sample_background_task()` |
+| `main.py` | HTTP interface, all routes, dispatch (sync/Celery), storage selection | `app` (FastAPI) |
+| `runner.py` | parse → execute → persist; shared by API + worker | `run_workflow()` |
+| `parser.py` | YAML deserialization, schema validation, cycle detection | `WorkflowConfig`, `StepConfig`, `StepCondition`, `load_workflow_yaml()` |
+| `executor.py` | DAG traversal, retries+backoff, branching, DLQ, `on_step` hook | `WorkflowExecutor` |
+| `tasks.py` | Task implementations and registry | `TASK_REGISTRY`, `parse_text()`, `classify_with_llm()`, `send_notification()` |
+| `scheduler.py` | Cron scheduling (croniter) | `WorkflowScheduler` |
+| `webhooks.py` | Named webhook → workflow registry | `WebhookRegistry` |
+| `dag.py` | `{nodes, edges, status}` projection for a UI | `build_dag()` |
+| `db.py` | DB-availability probe + storage selection | `probe_database()`, `get_storage()` |
+| `storage.py` | In-memory run persistence (no-DB fallback) | `InMemoryWorkflowStorage` |
+| `storage_db.py` | PostgreSQL run persistence (default) | `DatabaseWorkflowStorage` |
+| `models.py` | SQLAlchemy ORM models | `WorkflowRun`, `StepExecution` |
+| `worker.py` | Celery app + real background workflow task | `celery_app`, `run_workflow_task()` |
 | `config.py` | Project-specific configuration | `AppConfig` (extends `BaseAppConfig`) |
 | `errors.py` | Structured error response handler | `application_error_handler()` |
 
@@ -25,11 +32,16 @@ Imported from `shared-core` (sibling library):
 
 | Module | Used In | Purpose |
 |--------|---------|---------|
-| `shared_core.config.BaseAppConfig` | `config.py`, `worker.py` | Base settings with `DATABASE_URL`, `REDIS_URL`, `LOG_LEVEL` |
-| `shared_core.database.DatabaseManager` | `main.py` | SQLAlchemy session factory and connection pooling |
-| `shared_core.redis.RedisManager` | `main.py` | Redis connection wrapper with `ping()` health check |
-| `shared_core.logging.setup_logging` | `main.py` | Loguru configuration with service name tagging |
-| `shared_core.errors.BaseApplicationError` | `main.py`, `errors.py` | Base exception class with `status_code`, `code`, `message` |
+| `shared_core.config.BaseAppConfig` | `config.py` | Base settings (`DATABASE_URL`, `REDIS_URL`, Celery, LLM keys) |
+| `shared_core.database.DatabaseManager` | `db.py`, `main.py` | SQLAlchemy session factory + pooling |
+| `shared_core.redis.RedisManager` | `main.py` | Redis wrapper with `ping()` health check |
+| `shared_core.logging.setup_logging` | `main.py` | Loguru configuration with service tagging |
+| `shared_core.errors` | `main.py`, `errors.py` | `BaseApplicationError` + `application_error_handler` |
+| `shared_core.health.check_health` | `main.py` | DB + Redis health probe |
+| `shared_core.tasks.create_celery_app` | `worker.py` | Celery app bootstrap |
+| `shared_core.docparse.chunk_text` | `tasks.py` | Real text chunking in `parse_text` |
+| `shared_core.llm.LLMClientFactory` | `tasks.py` | Real LLM path in `classify_with_llm` (when keyed) |
+| `shared_core.testing.MockDatabase` | tests | In-memory SQLite for storage tests |
 
 ## Data Flow
 
@@ -97,10 +109,11 @@ sequenceDiagram
 2. Enter main loop (continues while `len(completed) < len(steps)`)
 3. Each round scans all steps:
    - Skip non-`PENDING` steps
-   - Check if all `depends_on` step IDs are in the `completed` set
-   - If deps met: set `RUNNING`, look up task in registry, call it, set `COMPLETED`
-4. If a full round passes with no step executed and uncompleted steps remain → **deadlock detected**, loop breaks
-5. Return final `statuses` dict
+   - Check if all `depends_on` step IDs are in the `resolved` set
+   - If a `condition` is present and not satisfied by prior results → mark `SKIPPED` (resolved)
+   - Otherwise set `RUNNING`, run the task with retries+backoff → `COMPLETED`, or `FAILED` + dead-letter on exhaustion
+4. If a full round passes with no step resolved while uncompleted steps remain → no-progress break (a defense-in-depth guard; cycles are already rejected at parse time)
+5. Return the final `statuses` dict (`overall_status` aggregates to completed/failed/partial)
 
 This is an O(n²) algorithm in the worst case (n = number of steps), which is acceptable for workflows with dozens of steps. It does not require building an explicit adjacency list or performing a formal topological sort—the dependency check is inline.
 
@@ -109,95 +122,89 @@ This is an O(n²) algorithm in the worst case (n = number of steps), which is ac
 ```mermaid
 stateDiagram-v2
     [*] --> PENDING: Step created
-    PENDING --> RUNNING: Dependencies met, task found
-    RUNNING --> COMPLETED: task_fn() returns successfully
-    RUNNING --> FAILED: task_fn() raises exception
-    PENDING --> FAILED: Task not found in registry
+    PENDING --> SKIPPED: Condition not met
+    PENDING --> RUNNING: Dependencies met, condition (if any) satisfied
+    RUNNING --> COMPLETED: task returns
+    RUNNING --> RUNNING: task raises, retries remain (backoff)
+    RUNNING --> FAILED: retries exhausted -> dead-letter queue
+    SKIPPED --> [*]
     FAILED --> [*]
     COMPLETED --> [*]
 
     note right of PENDING: Default state at WorkflowExecutor init
-    note right of FAILED: Executor raises, halting workflow
+    note right of FAILED: Recorded in DLQ; independent branches continue
+    note right of SKIPPED: Counts as resolved, no downstream deadlock
 ```
 
 ### Task Registry
 
-`TASK_REGISTRY` in `tasks.py` is a plain `Dict[str, Callable]` mapping string names to zero-argument functions:
+`TASK_REGISTRY` in `tasks.py` maps string names to callables invoked as
+`task_fn(context=..., params=...)`, where `context` holds prior step results and
+`params` holds the step's declared parameters:
 
 ```python
 TASK_REGISTRY = {
-    "parse_text": parse_text,          # → "metadata_parsed"
-    "classify_with_llm": classify_with_llm,  # → "category_business"
-    "send_notification": send_notification,   # → "notification_sent"
+    "parse_text": parse_text,              # real text stats via shared_core.docparse
+    "classify_with_llm": classify_with_llm,  # mock -> real LLM -> offline simulation
+    "send_notification": send_notification,   # simulated dispatch
+    "always_fail": always_fail,               # exercises retries / DLQ
 }
 ```
 
-The executor does a `dict.get()` lookup. If the task name is not found, the step is marked `FAILED` and a `ValueError` is raised.
+The executor validates the registry up front (`validate_registry()` raises
+`ValueError` listing any unknown task), then does a `dict.get()` lookup per step.
 
 ## Storage Model
 
-### Current: In-Memory
-
-`InMemoryWorkflowStorage` stores run records in a `Dict[str, Dict]`:
-
-```python
-{
-    "run_id": {
-        "workflow_name": "lead_intake",
-        "statuses": {"parse_input": "COMPLETED", ...},
-        "timestamp": "2026-06-08T17:00:00Z"  # hardcoded
-    }
-}
-```
-
-**Note:** This storage class exists but is not yet wired into `main.py` — the `/workflows/run` endpoint returns statuses directly from the executor without persisting them.
-
-### Planned: PostgreSQL
-
-Future schema (not yet implemented):
-
-| Table | Columns | Purpose |
-|-------|---------|---------|
-| `workflow_runs` | `id`, `workflow_name`, `status`, `created_at`, `completed_at` | Top-level run records |
-| `step_executions` | `id`, `run_id`, `step_id`, `task_name`, `status`, `result`, `error`, `started_at`, `completed_at`, `attempt` | Per-step execution history with retry tracking |
-| `workflow_definitions` | `id`, `name`, `yaml_content`, `version`, `created_at` | Stored workflow templates |
-
-## Background Jobs
-
-### Current State
-
-`worker.py` configures a Celery app using Redis as both broker and backend:
-
-```python
-celery_app = Celery(
-    config.APP_NAME,
-    broker=config.REDIS_URL,    # redis://localhost:6379/0
-    backend=config.REDIS_URL
-)
-```
-
-A single placeholder task `sample_background_task(x, y) → x + y` is defined. The Celery app is **not connected** to the `WorkflowExecutor`—all execution currently happens synchronously in the API request thread.
-
-### Planned Architecture
+PostgreSQL is the **default** backend; an in-memory store is the offline/test
+fallback. `db.probe_database()` runs a cheap `SELECT 1` (2s connect timeout) at
+startup and caches `db_available`; `get_storage()` then returns
+`DatabaseWorkflowStorage` (SQLAlchemy) or `InMemoryWorkflowStorage`. Both expose
+the same method surface (`save_run`, `get_run`, `list_runs`, `get_dead_letters`),
+so the rest of the system is oblivious to which is active.
 
 ```mermaid
 graph LR
-    API["FastAPI"] -->|enqueue| Redis["Redis Broker"]
-    Redis -->|dequeue| Worker["Celery Worker"]
-    Worker -->|execute| Executor["WorkflowExecutor"]
-    Executor -->|update| DB["PostgreSQL"]
-    Worker -->|result| Redis
-    API -->|poll status| DB
+    Runner["runner.run_workflow"] --> Probe{"db_available?"}
+    Probe -->|yes| DB["DatabaseWorkflowStorage"]
+    Probe -->|no| Mem["InMemoryWorkflowStorage"]
+    DB --> PG[("PostgreSQL")]
 ```
 
-The target model: API enqueues a workflow run ID, the Celery worker picks it up, runs the executor, and persists results. The API can then poll status via a `GET /workflows/{run_id}` endpoint.
+Schema (created by Alembic migration `0001_initial_schema`):
+
+| Table | Columns | Purpose |
+|-------|---------|---------|
+| `workflow_runs` | `id`, `workflow_name`, `yaml_definition`, `status`, `started_at`, `completed_at`, `dead_letters` (JSON), `created_at`, `updated_at` | Run records; YAML stored to enable rerun |
+| `step_executions` | `id`, `run_id` (FK), `step_id`, `task_name`, `status`, `result`, `error`, `attempt`, `created_at`, `updated_at` | Per-step execution history |
+
+## Background Jobs
+
+`worker.py` builds a Celery app via `shared_core.tasks.create_celery_app` and
+defines `run_workflow_task`, which runs a **whole workflow** (probe → storage →
+`runner.run_workflow`) in the background. It is importable with no broker
+running, so the API and tests import it freely. Dispatch is opt-in
+(`async_dispatch=true` on the request, or `WORKFLOW_ASYNC=1`); the default path
+runs synchronously and needs no broker.
+
+```mermaid
+graph LR
+    API["FastAPI"] -->|"delay(yaml, run_id)"| Redis["Redis Broker"]
+    Redis -->|dequeue| Worker["Celery Worker<br/>run_workflow_task"]
+    Worker --> Runner["runner.run_workflow"]
+    Runner -->|persist| DB[("PostgreSQL")]
+    API -->|"GET /workflows/{run_id}"| DB
+```
+
+The same `runner.run_workflow()` powers both the synchronous API path and the
+Celery worker, so the two can never diverge.
 
 ## External Dependencies
 
 | Service | Required | Used By | Failure Behavior |
 |---------|----------|---------|------------------|
-| PostgreSQL 16 | Yes (for health) | `main.py` health check, future persistence | Health reports `"database": "offline"`, API still functions |
-| Redis 7 | Yes (for health + Celery) | `main.py` health check, `worker.py` broker | Health reports `"redis": "offline"`, Celery cannot start |
+| PostgreSQL 16 | Optional (default persistence) | run persistence, health | Probe fails fast → falls back to in-memory storage; health reports `"database": "offline"` |
+| Redis 7 | Optional (async dispatch only) | Celery broker, health | Async dispatch unavailable; default sync path unaffected; health reports `"redis": "offline"` |
 
 Both services are provisioned via `docker-compose.yml` with health checks (`pg_isready`, `redis-cli ping`).
 
@@ -207,26 +214,28 @@ Both services are provisioned via `docker-compose.yml` with health checks (`pg_i
 
 ```mermaid
 graph TD
-    YAML["Invalid YAML"] -->|yaml.safe_load raises| Parser
-    Schema["Invalid Schema"] -->|Pydantic ValidationError| Parser
-    Parser -->|Exception propagates| API["main.py run_workflow()"]
-    API -->|HTTPException 400| Client
+    YAML["Invalid YAML / non-mapping"] -->|WorkflowValidationError| Parser
+    Schema["Invalid schema / cycle / dup id"] -->|ValidationError / WorkflowValidationError| Parser
+    Parser -->|propagates| API["main.py"]
+    API -->|HTTPException 422| Client
 
-    Missing["Missing Task"] -->|ValueError| Executor["WorkflowExecutor"]
-    TaskErr["Task Exception"] -->|re-raise| Executor
-    Executor -->|Exception propagates| API
-    API -->|HTTPException 400| Client
+    Missing["Missing task"] -->|ValueError| Validate["validate_registry()"]
+    Validate -->|propagates| API
+
+    TaskErr["Task exception (retries exhausted)"] --> Exec["WorkflowExecutor"]
+    Exec -->|step FAILED + dead-letter| Run["run status = failed"]
+    Run -->|HTTP 200 body| Client
 
     AppErr["BaseApplicationError"] -->|caught by handler| Handler["application_error_handler"]
     Handler -->|JSONResponse| Client
 ```
 
-- **YAML errors:** `yaml.safe_load()` raises `yaml.YAMLError` → caught by `run_workflow()` → returns 400
-- **Schema errors:** Pydantic `ValidationError` for missing `name`, invalid `steps` → caught → returns 400
-- **Registry misses:** `ValueError(f"Task {step.task} missing")` → caught → returns 400
-- **Task failures:** Any exception from `task_fn()` → step marked `FAILED` → re-raised → returns 400
-- **Deadlock:** No exception raised; executor logs error and returns partial statuses with remaining steps stuck in `PENDING`
-- **Infrastructure errors:** `BaseApplicationError` subclasses caught by global `application_error_handler` → structured JSON response
+- **YAML / non-mapping:** `load_workflow_yaml` raises `WorkflowValidationError` → **422**.
+- **Schema errors:** missing `name`, duplicate step ids, negative `retries` → Pydantic `ValidationError` → **422**.
+- **Cycles / unknown deps:** `detect_cycles` raises `WorkflowValidationError` at parse time → **422**.
+- **Registry misses:** `validate_registry()` raises `ValueError` before execution → **422**.
+- **Task failures:** retried with backoff; on exhaustion the step is marked `FAILED`, recorded in the **dead-letter queue**, and the run completes with `status: "failed"` (**HTTP 200** — inspect the body, don't abort the run).
+- **Infrastructure errors:** `BaseApplicationError` subclasses caught by the global `application_error_handler` → structured JSON.
 
 ## Security Boundaries
 

@@ -2,130 +2,112 @@
 
 ## What This Is
 
-A declarative workflow orchestration engine that accepts YAML-defined DAGs, resolves step dependencies in topological order, dispatches tasks via a registry pattern, and tracks step-level status (`PENDING → RUNNING → COMPLETED/FAILED`). The API layer is FastAPI; the execution engine is an in-process `WorkflowExecutor` with deadlock detection. A Celery worker scaffold exists for future async dispatch.
+A declarative workflow orchestration engine. It accepts YAML-defined DAGs,
+resolves step dependencies in topological order, dispatches tasks via a registry,
+and tracks step-level status (`PENDING → RUNNING → COMPLETED/FAILED/SKIPPED`).
+It supports retries with backoff, conditional branching, a dead-letter queue,
+cron scheduling, webhook triggers, manual rerun, and real background dispatch via
+Celery. Runs persist to PostgreSQL by default with a transparent in-memory
+fallback. The HTTP surface is FastAPI; the engine is offline-first (no API keys,
+no DB, no broker required).
 
 ## Commands
 
-Run from within the `async-workflow-engine/` directory:
+Run from within `async-workflow-engine/` (use the venv's python):
 
 ```bash
-make install          # pip install -e ../shared-core && pip install -r requirements.txt
-make dev              # python src/workflow_engine/main.py (starts uvicorn)
-make test             # pytest (runs tests/test_core.py)
-make lint             # ruff check .
-make format           # ruff format .
+make install          # pip install -e ../shared-core[...] && pip install -e ".[dev]"
+make dev              # uvicorn (src/workflow_engine/main.py:main)
+make test             # pytest (120 tests, no network/DB/broker needed)
+make lint             # ruff check src/workflow_engine tests examples alembic
+make format           # ruff format ...
 make typecheck        # pyright src/
+make migrate          # alembic upgrade head
+make worker           # celery -A workflow_engine.worker.celery_app worker
 make docker-up        # docker compose up -d (PostgreSQL + Redis)
 make docker-down      # docker compose down
-make demo             # python examples/run_demo.py (runs lead_intake workflow)
-make clean            # remove __pycache__, .pytest_cache, etc.
+make demo             # python examples/run_demo.py
+make clean            # remove caches
 ```
-
-**Order matters:** `make docker-up` then `make install` before anything else.
 
 ## Entry Point
 
-`src/workflow_engine/main.py` — Creates FastAPI app, instantiates `AppConfig`, `DatabaseManager`, `RedisManager`, registers the `BaseApplicationError` handler, and exposes two routes:
+`src/workflow_engine/main.py` — FastAPI app. A lifespan handler probes the DB at
+startup (`probe_database`) to select the storage backend. Routes:
 
-- `POST /workflows/run` — Accepts `WorkflowPayload.yaml_definition`, calls `load_workflow_yaml()` → `WorkflowExecutor.execute()`, returns step statuses
-- `GET /health` — Probes PostgreSQL and Redis, returns per-dependency status
+| Method & Path | Handler |
+|---------------|---------|
+| `POST /workflows/validate` | `validate_workflow` |
+| `POST /workflows/run` | `run_workflow_endpoint` (sync, or async via `async_dispatch`) |
+| `POST /workflows/{run_id}/rerun` | `rerun_workflow` |
+| `GET /workflows` | `list_workflows` |
+| `GET /workflows/dead-letters` | `list_dead_letters` (declared before `{run_id}`) |
+| `GET /workflows/{run_id}` | `get_workflow_run` |
+| `GET /workflows/{run_id}/dag` | `get_workflow_dag` |
+| `POST /webhooks/{name}/register` | `register_webhook` |
+| `GET /webhooks` | `list_webhooks` |
+| `POST /webhooks/{name}` | `trigger_webhook` |
+| `POST /schedules` | `create_schedule` |
+| `GET /schedules` | `list_schedules` |
+| `DELETE /schedules/{name}` | `delete_schedule` |
+| `POST /schedules/run-due` | `run_due_schedules` |
+| `GET /tasks` | `list_tasks` |
+| `GET /health` | `health_check` (adds `storage` = database/in-memory) |
 
 ## Source Modules
 
 | File | Purpose |
 |------|---------|
-| `src/workflow_engine/__init__.py` | Package marker |
-| `src/workflow_engine/main.py` | FastAPI app, routes (`/workflows/run`, `/health`), dependency wiring |
-| `src/workflow_engine/executor.py` | `WorkflowExecutor` class — DAG traversal, topological execution, deadlock detection, status tracking |
-| `src/workflow_engine/parser.py` | `WorkflowConfig` and `StepConfig` Pydantic models, `load_workflow_yaml()` function using `yaml.safe_load` |
-| `src/workflow_engine/tasks.py` | `TASK_REGISTRY` dict mapping task names to callables: `parse_text`, `classify_with_llm`, `send_notification` |
-| `src/workflow_engine/storage.py` | `InMemoryWorkflowStorage` — stub dict-based persistence for run records |
-| `src/workflow_engine/worker.py` | Celery app configured with Redis broker/backend, `sample_background_task` placeholder |
-| `src/workflow_engine/config.py` | `AppConfig(BaseAppConfig)` — project-specific config, sets `APP_NAME = "async-workflow-engine"` |
-| `src/workflow_engine/errors.py` | `application_error_handler` — global FastAPI handler for `BaseApplicationError` subclasses |
+| `main.py` | FastAPI app, all routes, dispatch (sync/Celery), storage selection |
+| `runner.py` | `run_workflow()` — parse → execute → persist; shared by API + worker |
+| `executor.py` | `WorkflowExecutor` — DAG traversal, retries, branching, DLQ, `on_step` hook |
+| `parser.py` | `WorkflowConfig`/`StepConfig`/`StepCondition`, `load_workflow_yaml`, cycle detection |
+| `tasks.py` | `TASK_REGISTRY`: `parse_text` (docparse), `classify_with_llm` (sim/real LLM), `send_notification`, `always_fail` |
+| `scheduler.py` | `WorkflowScheduler` (croniter): register/due/mark_ran |
+| `webhooks.py` | `WebhookRegistry` — name → workflow YAML |
+| `dag.py` | `build_dag()` — `{nodes, edges, status}` projection for a UI |
+| `db.py` | `probe_database()` / `get_storage()` — DB-default, in-memory fallback |
+| `storage.py` | `InMemoryWorkflowStorage` (no-DB fallback) |
+| `storage_db.py` | `DatabaseWorkflowStorage` (SQLAlchemy, default) |
+| `models.py` | `WorkflowRun` (+ `dead_letters` JSON), `StepExecution` |
+| `worker.py` | Celery app + `run_workflow_task`, `run_due_schedules` (importable w/o broker) |
+| `config.py` | `AppConfig(BaseAppConfig)` |
+| `errors.py` | Re-exports `application_error_handler` |
 
-## Docker Services
+`alembic/versions/0001_initial_schema.py` creates both tables.
 
-From `docker-compose.yml`:
+## Key Behaviors / Gotchas
 
-| Service | Image | Port | Container Name |
-|---------|-------|------|----------------|
-| `postgres` | `pgvector/pgvector:pg16` | 5432 | `template_postgres` |
-| `redis` | `redis:7-alpine` | 6379 | `template_redis` |
+- **Storage selection**: `db.db_available` is a module-level cache set by
+  `probe_database()`. `get_storage()` reads it. `main._storage()` resolves per
+  request. The probe uses a 2s connect timeout so it fails fast offline.
+- **Route order**: `/workflows/dead-letters` MUST stay declared before
+  `/workflows/{run_id}` or it gets captured as a run id.
+- **Async dispatch**: only when `async_dispatch=true` on the request or
+  `WORKFLOW_ASYNC=1`; requires a live Celery worker + Redis. Default is sync.
+- **LLM**: `classify_with_llm` is mock → real (`LLMClientFactory`, needs a key) →
+  deterministic simulation. Offline by default.
+- **Conditional branching**: a condition's source step is an implicit dependency;
+  non-matching steps are `SKIPPED` (resolved, so downstream steps don't deadlock).
 
-Both have healthchecks configured. Volumes: `pgdata`, `redisdata`.
+## Docker Services (`docker-compose.yml`)
 
-## Layout
+| Service | Image | Port | Container |
+|---------|-------|------|-----------|
+| `postgres` | `pgvector/pgvector:pg16` | 5432 | `awfe_postgres` |
+| `redis` | `redis:7-alpine` | 6379 | `awfe_redis` |
 
-```
-async-workflow-engine/
-├── src/workflow_engine/
-│   ├── __init__.py
-│   ├── main.py              # FastAPI app + routes
-│   ├── executor.py           # WorkflowExecutor (DAG engine)
-│   ├── parser.py             # YAML → WorkflowConfig/StepConfig
-│   ├── tasks.py              # TASK_REGISTRY + task functions
-│   ├── storage.py            # InMemoryWorkflowStorage stub
-│   ├── worker.py             # Celery app + sample task
-│   ├── config.py             # AppConfig extends BaseAppConfig
-│   └── errors.py             # Error handler for BaseApplicationError
-├── tests/
-│   └── test_core.py          # Health endpoint test
-├── examples/
-│   ├── run_demo.py           # Standalone DAG execution demo
-│   └── sample_workflow.yaml  # lead_intake workflow definition
-├── docs/
-│   ├── architecture.md
-│   ├── design-decisions.md
-│   ├── failure-modes.md
-│   ├── roadmap.md
-│   └── security.md
-├── .env.example
-├── docker-compose.yml
-├── Makefile
-├── pyproject.toml
-├── requirements.txt
-├── pyrightconfig.json
-├── ruff.toml
-└── pytest.ini
-```
+## Tests
 
-## Current State
-
-**Functional MVP.** The core execution path works end-to-end:
-
-- ✅ YAML parsing with Pydantic validation (`WorkflowConfig`, `StepConfig`)
-- ✅ DAG execution with topological dependency resolution
-- ✅ Deadlock detection (breaks loop when no step can execute)
-- ✅ Task registry dispatch (`TASK_REGISTRY` → callable lookup)
-- ✅ Step status tracking (`PENDING → RUNNING → COMPLETED/FAILED`)
-- ✅ FastAPI endpoint accepts YAML and returns step statuses
-- ✅ Health check probes PostgreSQL and Redis
-- ✅ Celery worker configured (not yet wired to executor)
-- ⚠️ Storage is in-memory stub (not persisting to PostgreSQL)
-- ⚠️ Retry field is parsed but not enforced
-- ⚠️ No step I/O piping (tasks take no arguments)
-- ⚠️ Docker container names still use `template_` prefix
-
-## Key Dependencies
-
-Beyond shared-core (`config`, `database`, `redis`, `logging`, `errors`):
-
-| Package | Version | Used For |
-|---------|---------|----------|
-| `pyyaml` | ≥6.0 | Workflow definition parsing (`yaml.safe_load`) |
-| `celery` | ≥5.3 | Background task worker (scaffold, not yet integrated) |
-| `loguru` | ≥0.7 | Structured logging in executor and tasks |
-| `sqlalchemy` | ≥2.0 | Database health check, future persistence |
-| `httpx` | ≥0.24 | HTTP client (available, not yet used) |
+`tests/` — parser, executor, tasks, scheduler, webhooks, dag, runner (in-memory +
+SQLite via `shared_core.testing.MockDatabase`), both storage backends, db probe,
+Celery worker (eager, no broker), every API endpoint (success + error), models,
+and a demo smoke test. 120 tests, all offline.
 
 ## When to Update This File
 
-- When adding new modules to `src/workflow_engine/` (especially new task types or storage backends)
-- When wiring Celery worker to the executor (changes execution model)
-- When adding new API endpoints (e.g., `/workflows/{id}/status`, `/workflows/{id}/rerun`)
-- When replacing `InMemoryWorkflowStorage` with PostgreSQL persistence
-- When implementing retry logic (changes `StepConfig` behavior)
-- When adding new Docker services (e.g., Flower for Celery monitoring)
-- When renaming Docker container names from `template_` prefix
-- When adding webhook or schedule trigger endpoints
+- New `src/workflow_engine/` modules, task types, or storage backends.
+- New API endpoints or changes to dispatch/storage selection.
+- New Celery tasks or scheduler/beat wiring.
+- New alembic migrations or model columns.
+- New Docker services (e.g. Flower for Celery monitoring).

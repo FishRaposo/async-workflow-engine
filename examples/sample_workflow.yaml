@@ -1,15 +1,39 @@
+# Lead-intake workflow: parse an inbound message, classify it, and route a
+# notification conditionally based on the classification result.
 name: lead_intake
+schedule: "*/15 * * * *"   # optional cron: every 15 minutes
 steps:
   - id: parse_input
     task: parse_text
-    retries: 3
+    params:
+      text: "ACME Corp requests a business quote for 500 widgets. Priority lead."
+      chunk_size: 128
+
   - id: classify
     task: classify_with_llm
-    depends_on:
-      - parse_input
-    retries: 2
-  - id: notify
+    depends_on: [parse_input]
+    params:
+      labels: [business, support, spam]
+      text: "ACME Corp requests a business quote for 500 widgets. Priority lead."
+
+  # Conditional branch: only notify sales when the lead is classified business.
+  - id: notify_sales
     task: send_notification
-    depends_on:
-      - classify
-    retries: 1
+    depends_on: [classify]
+    condition:
+      step: classify
+      contains: business
+    params:
+      channel: slack
+      message: "New business lead — route to sales."
+
+  # Alternate branch: only fires when classified as spam.
+  - id: quarantine
+    task: send_notification
+    depends_on: [classify]
+    condition:
+      step: classify
+      contains: spam
+    params:
+      channel: log
+      message: "Spam lead quarantined."

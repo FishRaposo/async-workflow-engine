@@ -1,7 +1,13 @@
+"""SQLAlchemy models for workflow runs and step executions.
+
+These map onto the ``shared_core.database.Base`` metadata so alembic and the
+shared ``DatabaseManager`` pick them up automatically.
+"""
 
 from shared_core.database import Base, TimestampMixin, UUIDMixin
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
+from sqlalchemy.types import JSON
 
 
 class WorkflowRun(Base, UUIDMixin, TimestampMixin):
@@ -12,6 +18,8 @@ class WorkflowRun(Base, UUIDMixin, TimestampMixin):
     status = Column(String(50), default="pending")
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    # Quarantined failed steps (the dead-letter queue) serialized as JSON.
+    dead_letters = Column(JSON, nullable=True)
 
     steps = relationship(
         "StepExecution", back_populates="run", cascade="all, delete-orphan"

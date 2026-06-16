@@ -31,6 +31,22 @@ services:
       timeout: 5s
       retries: 5
 
+  # Next.js orchestration console (Flowforge). Talks to the FastAPI backend at
+  # NEXT_PUBLIC_API_URL; falls back to bundled demo data when it is unreachable.
+  web:
+    build:
+      context: ./frontend
+      target: dev
+    container_name: awfe_web
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+
 volumes:
   pgdata:
   redisdata:

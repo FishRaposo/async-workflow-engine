@@ -1,103 +1,105 @@
+"""DatabaseWorkflowStorage tests against a real in-memory SQLite DB.
+
+Uses ``shared_core.testing.MockDatabase`` so the full SQLAlchemy persistence
+path (insert, query, relationship loading, JSON column) is exercised without a
+real PostgreSQL server.
+"""
+
 import uuid
-from unittest.mock import MagicMock
 
 import pytest
-from workflow_engine.models import StepExecution, WorkflowRun
+
 from workflow_engine.storage_db import DatabaseWorkflowStorage
 
 
 @pytest.fixture
-def mock_session():
-    session = MagicMock()
-    session.get.return_value = None
-    session.query.return_value.order_by.return_value.limit.return_value.all.return_value = []
-    return session
+def storage(mock_db):
+    return DatabaseWorkflowStorage(mock_db.get_session)
 
 
-@pytest.fixture
-def mock_session_factory(mock_session):
-    def factory():
-        yield mock_session
-
-    return factory
+def test_save_run_returns_uuid(storage):
+    run_id = storage.save_run("wf", "name: wf\nsteps: []", {"step1": "COMPLETED"})
+    uuid.UUID(run_id)  # raises if not a valid uuid
 
 
-@pytest.fixture
-def storage(mock_session_factory):
-    return DatabaseWorkflowStorage(mock_session_factory)
+def test_save_and_get_roundtrip(storage):
+    run_id = storage.save_run(
+        "wf",
+        "name: wf\nsteps: []",
+        {"a": "COMPLETED", "b": "SKIPPED"},
+        results={"a": "out"},
+        errors={},
+        task_names={"a": "parse_text", "b": "send_notification"},
+    )
+    record = storage.get_run(run_id)
+    assert record["workflow_name"] == "wf"
+    assert record["step_statuses"] == {"a": "COMPLETED", "b": "SKIPPED"}
+    assert record["results"]["a"] == "out"
+    assert record["status"] == "completed"
 
 
-class TestDatabaseWorkflowStorage:
-    def test_save_run_returns_uuid(self, storage):
-        run_id = storage.save_run(
-            "test_workflow",
-            "name: test\nsteps: []",
-            {"step1": "COMPLETED"},
-        )
-        assert isinstance(run_id, str)
-        uuid.UUID(run_id)
+def test_get_run_missing_returns_none(storage):
+    assert storage.get_run("does-not-exist") is None
 
-    def test_save_run_rolls_back_on_error(self, storage, mock_session):
-        mock_session.commit.side_effect = Exception("DB error")
-        with pytest.raises(Exception, match="DB error"):
-            storage.save_run(
-                "test_workflow",
-                "name: test\nsteps: []",
-                {"step1": "COMPLETED"},
-            )
-        mock_session.rollback.assert_called_once()
 
-    def test_save_run_passes_results(self, storage):
-        run_id = storage.save_run(
-            "test_workflow",
-            "name: test\nsteps: [{- id: s1\n  task: t}]",
-            {"s1": "COMPLETED"},
-            results={"s1": "output_value"},
-        )
-        assert run_id is not None
+def test_get_run_includes_task_names(storage):
+    # Regression: DatabaseWorkflowStorage.get_run() must return ``task_names``
+    # (keyed by step_id) so its shape matches InMemoryWorkflowStorage.
+    run_id = storage.save_run(
+        "wf",
+        "yaml",
+        {"a": "COMPLETED", "b": "SKIPPED"},
+        task_names={"a": "parse_text", "b": "send_notification"},
+    )
+    record = storage.get_run(run_id)
+    assert "task_names" in record
+    assert record["task_names"] == {"a": "parse_text", "b": "send_notification"}
 
-    def test_get_run_returns_none_for_missing(self, storage, mock_session):
-        mock_session.get.return_value = None
-        result = storage.get_run("nonexistent")
-        assert result is None
 
-    def test_get_run_returns_dict_for_existing(self, storage, mock_session):
-        mock_run = MagicMock()
-        mock_run.id = "run-123"
-        mock_run.workflow_name = "test_workflow"
-        mock_run.status = "completed"
-        mock_run.created_at = MagicMock()
-        mock_run.created_at.isoformat.return_value = "2026-01-01T00:00:00"
-        mock_run.completed_at = MagicMock()
-        mock_run.completed_at.isoformat.return_value = "2026-01-01T00:01:00"
-        mock_step = MagicMock()
-        mock_step.step_id = "step1"
-        mock_step.status = "COMPLETED"
-        mock_run.steps = [mock_step]
-        mock_session.get.return_value = mock_run
+def test_dead_letters_persisted_as_json(storage):
+    run_id = storage.save_run(
+        "wf",
+        "yaml",
+        {"bad": "FAILED"},
+        status="failed",
+        errors={"bad": "boom"},
+        dead_letters=[{"step_id": "bad", "task": "always_fail", "error": "boom"}],
+    )
+    record = storage.get_run(run_id)
+    assert record["status"] == "failed"
+    assert record["errors"]["bad"] == "boom"
+    dls = storage.get_dead_letters(run_id)
+    assert len(dls) == 1
+    assert dls[0]["step_id"] == "bad"
 
-        result = storage.get_run("run-123")
-        assert result is not None
-        assert result["run_id"] == "run-123"
-        assert result["workflow_name"] == "test_workflow"
-        assert result["step_statuses"]["step1"] == "COMPLETED"
 
-    def test_list_runs_returns_list(self, storage, mock_session):
-        mock_run = MagicMock()
-        mock_run.id = "run-1"
-        mock_run.workflow_name = "wf1"
-        mock_run.status = "completed"
-        mock_run.created_at = MagicMock()
-        mock_run.created_at.isoformat.return_value = "2026-01-01T00:00:00"
-        mock_session.query.return_value.order_by.return_value.limit.return_value.all.return_value = [
-            mock_run
-        ]
+def test_global_dead_letters(storage):
+    storage.save_run(
+        "wf",
+        "yaml",
+        {"bad": "FAILED"},
+        status="failed",
+        dead_letters=[{"step_id": "bad", "task": "t", "error": "x"}],
+    )
+    storage.save_run("clean", "yaml", {"ok": "COMPLETED"})
+    dls = storage.get_dead_letters()
+    assert len(dls) == 1
+    assert "run_id" in dls[0]
 
-        runs = storage.list_runs()
-        assert len(runs) == 1
-        assert runs[0]["workflow_name"] == "wf1"
 
-    def test_list_runs_empty(self, storage, mock_session):
-        mock_session.query.return_value.order_by.return_value.limit.return_value.all.return_value = []
-        runs = storage.list_runs()
-        assert runs == []
+def test_list_runs(storage):
+    storage.save_run("a", "yaml", {"s": "COMPLETED"})
+    storage.save_run("b", "yaml", {"s": "COMPLETED"})
+    runs = storage.list_runs()
+    assert len(runs) == 2
+    assert {r["workflow_name"] for r in runs} == {"a", "b"}
+
+
+def test_rerun_overwrites_same_run_id(storage):
+    run_id = storage.save_run("wf", "yaml", {"s": "COMPLETED"})
+    storage.save_run("wf", "yaml", {"s": "FAILED"}, status="failed", run_id=run_id)
+    record = storage.get_run(run_id)
+    assert record["status"] == "failed"
+    assert record["step_statuses"]["s"] == "FAILED"
+    # No duplicate steps left behind.
+    assert list(record["step_statuses"].keys()) == ["s"]

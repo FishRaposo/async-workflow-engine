@@ -11,6 +11,7 @@ class TestWorkflowRunModel:
         assert hasattr(WorkflowRun, "status")
         assert hasattr(WorkflowRun, "started_at")
         assert hasattr(WorkflowRun, "completed_at")
+        assert hasattr(WorkflowRun, "dead_letters")
         assert hasattr(WorkflowRun, "id")
         assert hasattr(WorkflowRun, "created_at")
         assert hasattr(WorkflowRun, "updated_at")

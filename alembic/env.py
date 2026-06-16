@@ -1,9 +1,8 @@
 import sys
+from logging.config import fileConfig
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from logging.config import fileConfig
 
 from shared_core.database import Base
 from sqlalchemy import create_engine
@@ -23,12 +22,12 @@ app_config = AppConfig()
 
 
 def run_migrations_offline() -> None:
-    url = app_config.DATABASE_URL
     context.configure(
-        url=url,
+        url=app_config.DATABASE_URL,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        render_as_batch=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -37,7 +36,11 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     connectable = create_engine(app_config.DATABASE_URL)
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            render_as_batch=True,
+        )
         with context.begin_transaction():
             context.run_migrations()
 

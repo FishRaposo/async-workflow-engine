@@ -5,212 +5,172 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![Status: MVP](https://img.shields.io/badge/status-MVP-yellow)
 
-**A declarative workflow orchestration engine that parses YAML definitions into executable DAGs, resolves dependencies in topological order, and tracks step-level status through a FastAPI interface.**
+**A declarative workflow orchestration engine that parses YAML DAGs, runs steps in topological order with retries and conditional branching, dispatches runs to Celery workers, and persists every run to PostgreSQL — with a full offline fallback.**
 
 ## Why This Exists
 
-Backend systems routinely need to coordinate multi-step processes—data ingestion pipelines, lead intake flows, notification chains—where tasks depend on each other and failures must be handled gracefully. Off-the-shelf orchestrators (Airflow, Prefect, Temporal) are powerful but heavyweight; they obscure the underlying mechanics of DAG resolution, dependency tracking, and retry logic behind layers of abstraction.
+Backend systems constantly coordinate multi-step processes — data ingestion, lead intake, notification chains — where steps depend on each other, some steps should only run under certain conditions, and failures must be quarantined rather than lost. Off-the-shelf orchestrators (Airflow, Prefect, Temporal) are powerful but heavyweight, and they hide the mechanics of DAG resolution, retries, scheduling, and dead-lettering behind a framework.
 
-This project builds a workflow engine from first principles. It demonstrates that the author understands how orchestration systems actually work: topological dependency resolution, task state machines, registry-based dispatch, deadlock detection, and structured error propagation—without hiding behind a framework.
+This project builds those mechanics from first principles: topological dependency resolution, a step state machine, retry-with-backoff, conditional branching, cron scheduling, webhook triggers, a dead-letter queue, and background dispatch via Celery — all wired through a FastAPI surface that exposes everything a dashboard needs.
+
+It is **offline-first**: it runs and tests with no API keys, no database, and no message broker, using deterministic simulations. When a PostgreSQL DB, a Redis broker, or an LLM API key *is* present, the real paths light up automatically.
 
 ## What It Demonstrates
 
-- **DAG execution engine** — `WorkflowExecutor` resolves step dependencies and executes tasks in topological order with deadlock detection
-- **Declarative YAML configuration** — Workflows are defined as data, not code; `parser.py` validates definitions through Pydantic models (`WorkflowConfig`, `StepConfig`)
-- **Task registry pattern** — `TASK_REGISTRY` maps string names to callable functions, enabling dynamic dispatch without import coupling
-- **Step-level state machine** — Each step tracks status through `PENDING → RUNNING → COMPLETED/FAILED` transitions
-- **Structured error handling** — Custom error hierarchy extending `shared_core.errors.BaseApplicationError` with global FastAPI exception handlers
-- **Health monitoring** — `/health` endpoint probes both PostgreSQL and Redis dependencies, reporting granular per-service status
-- **Celery worker scaffold** — Background task infrastructure configured with Redis broker for async execution path
-- **Clean separation of concerns** — Parser, executor, task registry, storage, worker, and API layer each in dedicated modules
+- **DAG execution engine** — `WorkflowExecutor` resolves dependencies in topological order with deadlock detection, retry-with-exponential-backoff, and a per-step persistence hook.
+- **Conditional branching** — a step runs only when a prior step's result satisfies a declared condition (`equals` / `contains` / `not_equals`); otherwise it is `SKIPPED` without deadlocking downstream steps.
+- **Dead-letter queue** — every step that exhausts its retries is quarantined with its error, attempts, and params for inspection and rerun.
+- **PostgreSQL persistence by default, in-memory fallback** — a startup DB probe selects `DatabaseWorkflowStorage`; if no DB is reachable it transparently falls back to `InMemoryWorkflowStorage`, so tests and the demo need no database. Alembic migrations ship for both tables.
+- **Real Celery dispatch** — `run_workflow_task` runs a full workflow in the background via `shared_core.tasks.create_celery_app`, importable with no broker running.
+- **Cron scheduling** — `WorkflowScheduler` (croniter-backed) registers workflows on a cron expression and computes which are due.
+- **Webhook triggers** — register a workflow under a name and fire it with `POST /webhooks/{name}`.
+- **Real task implementations** — `parse_text` (via `shared_core.docparse`), `classify_with_llm` (mock → real LLM via `shared_core.llm.LLMClientFactory` → deterministic simulation), and `send_notification`.
+- **Dashboard-ready API** — run/rerun/list/inspect runs, a `{nodes, edges, status}` DAG projection, schedules, webhooks, and the dead-letter queue.
 
 ## Architecture
 
 ```mermaid
 graph TB
-    Client["HTTP Client"] -->|POST /workflows/run| API["FastAPI App<br/>main.py"]
-    Client -->|GET /health| API
+    Client["HTTP Client / Dashboard"]
+    Webhook["External Event"]
+    Cron["Cron Tick"]
 
-    API -->|yaml_definition| Parser["YAML Parser<br/>parser.py"]
-    Parser -->|WorkflowConfig| Executor["WorkflowExecutor<br/>executor.py"]
-    Executor -->|step.task lookup| Registry["TASK_REGISTRY<br/>tasks.py"]
-    Registry -->|callable| Executor
-    Executor -->|statuses dict| API
+    Client -->|"POST /workflows/run"| API["FastAPI App<br/>main.py"]
+    Webhook -->|"POST /webhooks/{name}"| API
+    Cron -->|"POST /schedules/run-due"| API
 
-    API -->|health probe| DB["PostgreSQL<br/>pgvector:pg16"]
-    API -->|health probe| Redis["Redis 7"]
+    API --> Parser["YAML Parser<br/>parser.py"]
+    Parser -->|WorkflowConfig| Runner["Runner<br/>runner.py"]
+    Runner --> Executor["WorkflowExecutor<br/>executor.py"]
+    Executor -->|task lookup| Registry["TASK_REGISTRY<br/>tasks.py"]
+    Executor -->|failed steps| DLQ["Dead-Letter Queue"]
 
-    Worker["Celery Worker<br/>worker.py"] -->|broker/backend| Redis
-    Storage["InMemoryWorkflowStorage<br/>storage.py"] -.->|future| DB
+    API -->|"async_dispatch=true"| Celery["Celery Worker<br/>worker.py"]
+    Celery --> Runner
+
+    Runner -->|persist| Storage{"db_available?"}
+    Storage -->|yes| DBStore["DatabaseWorkflowStorage<br/>storage_db.py"]
+    Storage -->|no| MemStore["InMemoryWorkflowStorage<br/>storage.py"]
+    DBStore --> PG["PostgreSQL<br/>pgvector:pg16"]
+    Celery -->|broker| Redis["Redis 7"]
 
     style API fill:#009688,color:#fff
     style Executor fill:#1565c0,color:#fff
     style Parser fill:#7b1fa2,color:#fff
     style Registry fill:#e65100,color:#fff
+    style Celery fill:#37474f,color:#fff
 ```
+
+See [docs/architecture.md](docs/architecture.md) for sequence and state diagrams.
 
 ## Tech Stack
 
 | Component | Choice | Justification |
 |-----------|--------|---------------|
-| **API Framework** | FastAPI 0.100+ | Async-ready, auto-generated OpenAPI docs, Pydantic integration |
-| **YAML Parsing** | PyYAML 6.0+ | Industry standard; `yaml.safe_load` prevents code execution |
-| **Validation** | Pydantic v2 | `WorkflowConfig` and `StepConfig` models enforce schema at parse time |
-| **Task Queue** | Celery 5.3+ | Production-proven distributed task execution with Redis broker |
-| **Database** | PostgreSQL 16 (pgvector) | Relational storage for workflow runs; pgvector image shared across portfolio |
-| **Cache/Broker** | Redis 7 | Celery broker, health check target, future run-state caching |
-| **ORM** | SQLAlchemy 2.0+ | Database abstraction with connection pooling; used in health checks |
-| **Logging** | Loguru 0.7+ | Structured logging with step-level execution tracing |
-| **Shared Library** | `shared-core` | Config, database, Redis, logging, and error base classes |
+| **API Framework** | FastAPI 0.100+ | Async-ready, auto OpenAPI docs, Pydantic integration |
+| **YAML Parsing** | PyYAML 6.0+ | `yaml.safe_load` prevents code execution |
+| **Validation** | Pydantic v2 | Schema enforcement for workflow/step config and conditions |
+| **Task Queue** | Celery 5.3+ | Background workflow dispatch with Redis broker |
+| **Scheduling** | croniter 2.0+ | Real cron-expression parsing for scheduled workflows |
+| **Database** | PostgreSQL 16 (pgvector) | Run/step persistence; portfolio-shared image |
+| **Migrations** | Alembic 1.13+ | Versioned schema for `workflow_runs`, `step_executions` |
+| **Cache/Broker** | Redis 7 | Celery broker + health check target |
+| **ORM** | SQLAlchemy 2.0+ | Persistence + connection pooling |
+| **Logging** | Loguru 0.7+ | Structured, step-level execution tracing |
+| **Shared Library** | `shared-core` v1.3.0 | config, database, redis, logging, errors, health, tasks, llm, docparse |
 
 ## Local Setup
 
 ```bash
-# 1. Clone the portfolio and navigate to this project
 cd async-workflow-engine
 
-# 2. Start infrastructure
-make docker-up        # Launches PostgreSQL and Redis containers
+# 1. Create a venv and install (installs shared-core first)
+python -m venv .venv
+.venv/Scripts/python -m pip install -e ../shared-core[dev,docparse,embeddings]
+.venv/Scripts/python -m pip install -e ".[dev]"
 
-# 3. Install dependencies (installs shared-core first)
-make install
-
-# 4. Copy environment config
+# 2. (Optional) start infrastructure for the DB/broker paths
+make docker-up          # PostgreSQL + Redis
 cp .env.example .env
 
-# 5. Run the API server
-make dev              # Starts uvicorn via src/workflow_engine/main.py
+# 3. Run the API
+make dev                # uvicorn on :8000
 
-# 6. Run the demo
-make demo             # Executes examples/run_demo.py
-```
-
-### Prerequisites
-
-- Python 3.10+
-- Docker and Docker Compose
-- `shared-core` sibling directory (installed automatically by `make install`)
-
-## Demo
-
-The demo (`examples/run_demo.py`) executes a three-step `lead_intake` workflow without starting the API server:
-
-```bash
+# 4. Run the demo (no DB / keys / broker needed)
 make demo
 ```
 
-**What it does:**
-1. Parses an inline YAML workflow definition with three steps: `parse_input → classify → notify`
-2. Instantiates `WorkflowExecutor` with the parsed `WorkflowConfig` and `TASK_REGISTRY`
-3. Executes steps in dependency order — `parse_text()`, then `classify_with_llm()`, then `send_notification()`
-4. Prints the final status map
+### Optional real-path activation
 
-**Expected output:**
-```
---- Running Workflow Engine Scaffolding Demo ---
-Execution results: {'parse_input': 'COMPLETED', 'classify': 'COMPLETED', 'notify': 'COMPLETED'}
-```
+| Want | Set |
+|------|-----|
+| Persist runs to PostgreSQL | `DATABASE_URL` reachable + run `alembic upgrade head` |
+| Background dispatch | `make docker-up`, run a Celery worker, send `async_dispatch=true` or set `WORKFLOW_ASYNC=1` |
+| Real LLM classification | `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` |
 
-You can also test via the API:
+Everything works with **none** of these set — the engine falls back to in-memory storage, synchronous dispatch, and deterministic classification.
+
+## Demo
 
 ```bash
-curl -X POST http://localhost:8000/workflows/run \
-  -H "Content-Type: application/json" \
-  -d '{"yaml_definition": "name: test\nsteps:\n  - id: step1\n    task: parse_text\n"}'
+make demo            # python examples/run_demo.py
 ```
+
+The demo runs five scenarios fully offline and asserts each: (1) a conditional-branching `lead_intake` workflow, (2) the DAG projection a dashboard would render, (3) a failing step landing in the dead-letter queue, (4) persistence + manual rerun against the in-memory fallback, and (5) cron scheduling. It exits 0.
 
 ## Tests
 
 ```bash
-make test
+make test            # pytest
 ```
 
-Current test coverage (`tests/test_core.py`):
-- **Health endpoint** — Verifies `GET /health` returns 200 with service name `async-workflow-engine` and a `dependencies` object
-
-Planned test additions:
-- YAML parsing with valid/invalid/malformed definitions
-- DAG execution with linear, fan-out, and diamond dependencies
-- Deadlock detection on cyclic graphs
-- Task registry miss handling
-- Retry policy enforcement
-- Step status transition correctness
+Coverage spans every core module — parser (validation, conditions, cycles), executor (linear/fan-out/diamond DAGs, retries, branching, DLQ, hooks), scheduler, webhooks, DAG projection, runner (end-to-end against in-memory **and** SQLite stores via `shared_core.testing.MockDatabase`), both storage backends, the DB probe, the Celery worker (eager, no broker), every API endpoint (success + error paths), and a smoke test that the demo runs. No test needs a network, a real database, or a broker.
 
 ## API Reference
 
-### `POST /workflows/run`
-
-Accepts a YAML workflow definition and executes it synchronously.
-
-**Request body:**
-```json
-{
-  "yaml_definition": "name: lead_intake\nsteps:\n  - id: parse_input\n    task: parse_text\n"
-}
-```
-
-**Response (200):**
-```json
-{
-  "workflow": "lead_intake",
-  "step_statuses": {
-    "parse_input": "COMPLETED"
-  }
-}
-```
-
-**Error (400):** Returned for invalid YAML, missing tasks in registry, or execution failures.
-
-### `GET /health`
-
-Returns infrastructure health status.
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "service": "async-workflow-engine",
-  "dependencies": {
-    "database": "online",
-    "redis": "online"
-  }
-}
-```
+| Method & Path | Purpose |
+|---------------|---------|
+| `POST /workflows/validate` | Validate a YAML definition (schema + registry + cycles) |
+| `POST /workflows/run` | Run a workflow (sync, or async via `async_dispatch`/`WORKFLOW_ASYNC`) |
+| `POST /workflows/{run_id}/rerun` | Re-run a stored workflow under the same run id |
+| `GET /workflows` | List recent runs |
+| `GET /workflows/{run_id}` | Full run record (statuses, results, errors, dead letters) |
+| `GET /workflows/{run_id}/dag` | `{nodes, edges, status}` projection for a UI |
+| `GET /workflows/dead-letters` | Dead-letter queue (all, or `?run_id=`) |
+| `POST /webhooks/{name}/register` | Register a workflow under a webhook name |
+| `GET /webhooks` | List registered webhook triggers |
+| `POST /webhooks/{name}` | Fire the workflow bound to a webhook |
+| `POST /schedules` | Register a cron-scheduled workflow |
+| `GET /schedules` | List schedules (with next-run times) |
+| `DELETE /schedules/{name}` | Remove a schedule |
+| `POST /schedules/run-due` | Manually fire any due schedules |
+| `GET /tasks` | List registered task functions |
+| `GET /health` | DB + Redis health and active storage backend |
 
 ## Configuration
 
-Key environment variables from `.env.example`:
-
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `APP_NAME` | `async-workflow-engine` | Service identifier in logs and health responses |
-| `ENV` | `development` | Runtime environment flag |
-| `DEBUG` | `true` | Debug mode toggle |
-| `LOG_LEVEL` | `INFO` | Loguru logging verbosity |
-| `DATABASE_URL` | `postgresql+psycopg://postgres:postgres@localhost:5432/postgres` | PostgreSQL connection string |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection for Celery broker and health checks |
+| `APP_NAME` | `async-workflow-engine` | Service identifier |
+| `DATABASE_URL` | `postgresql+psycopg://postgres:postgres@localhost:5432/postgres` | Persistence target (probed at startup) |
+| `REDIS_URL` | `redis://localhost:6379/0` | Health + Celery broker |
+| `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | `redis://localhost:6379/0` | Background dispatch |
+| `WORKFLOW_ASYNC` | _(unset)_ | `1`/`true` to route runs through Celery by default |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | _(unset)_ | Enable real LLM classification |
+| `LOG_LEVEL` | `INFO` | Loguru verbosity |
 
 ## Known Limitations
 
-1. **Synchronous execution by default** — `WorkflowExecutor.execute()` runs synchronously; Celery-based async dispatch is scaffolded in `worker.py` but not wired to the executor's main path
-2. **In-memory storage is default** — `InMemoryWorkflowStorage` is the default backend and loses data on restart; `DatabaseWorkflowStorage` exists and is feature-complete but not yet wired as the default
-3. **Celery worker scaffold only** — `worker.py` defines a Celery app and sample task; the executor does not yet dispatch to Celery for true background execution
-4. **No workflow history UI** — `GET /workflows/{run_id}` returns status but there's no dashboard or visual DAG view for inspecting past runs
-5. **No scheduling or webhooks** — Workflows can only be triggered via API POST; no cron-style scheduling or webhook triggers
-6. **No conditional branching** — Steps always follow the declared DAG; no runtime conditional branching based on step output
+1. **Scheduler is tick-driven, not a daemon** — `WorkflowScheduler` computes due runs; firing them requires a Celery-beat loop or a periodic `POST /schedules/run-due`. The state is in-memory.
+2. **Webhook/schedule registries are in-memory** — registered triggers and schedules are lost on restart (runs themselves persist to PostgreSQL).
+3. **No authentication** on API endpoints (development posture).
+4. **Sequential step execution** — independent steps run in dependency order but not in parallel within a single run.
+5. **Async dispatch needs a live broker** — `async_dispatch=true` requires a running Celery worker + Redis; otherwise use the default synchronous path.
 
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md) for the full phased plan. Summary:
-
-- **Phase 1 (Display-Ready):** Retry logic, step I/O piping, PostgreSQL persistence, workflow status API, Celery-based async execution
-- **Phase 2 (Showcase):** Webhook triggers, scheduled workflows, dead-letter queue, manual rerun, visual DAG graph
-- **Phase 3 (Future):** Conditional branching, parallel fan-out, workflow versioning, OpenTelemetry tracing
+See [docs/roadmap.md](docs/roadmap.md). Highlights: parallel fan-out execution, Celery-beat-driven scheduling, persistent schedule/webhook registries, workflow versioning, OpenTelemetry tracing, and a step-I/O contract for typed piping between steps.
 
 ## Related Projects
 
-This is a **Wave 1** project in the [AI Infrastructure Showcase Portfolio](../). It provides foundational orchestration patterns that feed into:
-
-- **[hermes-agent-framework](../hermes-agent-framework)** — Uses workflow engine patterns for agent tool orchestration
-- **[document-intelligence-pipeline](../document-intelligence-pipeline)** — Applies similar DAG-based processing for document ingestion
-- **[shared-core](../shared-core)** — Provides the base config, database, Redis, logging, and error infrastructure used here
+A **Wave 1** project in the AI Infrastructure Showcase Portfolio. It shares `shared-core` (config, database, redis, logging, errors, health, tasks, llm, docparse) with the rest of the portfolio and provides orchestration patterns reused by the agent and document-pipeline projects.

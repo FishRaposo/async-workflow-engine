@@ -1,22 +1,39 @@
-from unittest.mock import MagicMock, patch
+"""Smoke tests: the demo runs end-to-end and the package imports cleanly."""
+
+import runpy
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEMO = PROJECT_ROOT / "examples" / "run_demo.py"
 
 
-def test_health_endpoint():
-    mock_db = MagicMock()
-    mock_redis = MagicMock()
-    mock_redis.ping.return_value = True
+def test_demo_runs_without_error(monkeypatch, capsys):
+    """The shipped demo must run to completion (exit 0) with no DB/keys."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(sys, "argv", [str(DEMO)])
+    runpy.run_path(str(DEMO), run_name="__main__")
+    out = capsys.readouterr().out
+    assert "Demo complete" in out
 
-    with (
-        patch("workflow_engine.main.db_manager", mock_db),
-        patch("workflow_engine.main.redis_manager", mock_redis),
-        patch("workflow_engine.main.storage", MagicMock()),
+
+def test_all_modules_import():
+    import importlib
+
+    for module in (
+        "workflow_engine.main",
+        "workflow_engine.worker",
+        "workflow_engine.runner",
+        "workflow_engine.executor",
+        "workflow_engine.parser",
+        "workflow_engine.scheduler",
+        "workflow_engine.webhooks",
+        "workflow_engine.dag",
+        "workflow_engine.db",
+        "workflow_engine.tasks",
+        "workflow_engine.storage",
+        "workflow_engine.storage_db",
+        "workflow_engine.models",
     ):
-        from fastapi.testclient import TestClient
-
-        from workflow_engine.main import app
-
-        with TestClient(app) as client:
-            response = client.get("/health")
-            assert response.status_code == 200
-            assert response.json()["service"] == "async-workflow-engine"
-            assert "dependencies" in response.json()
+        assert importlib.import_module(module) is not None
