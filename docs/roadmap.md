@@ -21,6 +21,8 @@ Milestones for the engine. Items marked ✅ are implemented in this MVP.
 - ✅ **Conditional branching**: steps gated on prior results (`equals`/`contains`/`not_equals`); non-matching steps `SKIPPED` without deadlock.
 - ✅ **Manual rerun**: `POST /workflows/{run_id}/rerun` re-executes the stored definition under the same id.
 - ✅ **DAG projection API**: `GET /workflows/{run_id}/dag` returns `{nodes, edges, status}` for a dashboard.
+- ✅ **Opt-in bounded parallelism**: independent ready steps run concurrently when `concurrency_limit > 1`; the default remains deterministic YAML-order execution.
+- ✅ **Opt-in typed I/O**: `TaskInput`, `TaskResult`, and `TaskRunner` adapt typed task objects while retaining the established keyword-callable task contract by default.
 
 ---
 
@@ -36,6 +38,5 @@ Milestones for the engine. Items marked ✅ are implemented in this MVP.
 
 - **Production deployment validation**: run against a live PostgreSQL, Redis, and Celery worker deployment with production network, credential, and observability controls.
 - **Multi-tenant security**: secret rotation, TLS termination, per-workflow RBAC, and distributed rate limiting beyond the local opt-in primitives.
-- **Typed step I/O**: a contract for piping structured (validated) data rather than the current task-result convention.
 - **OpenTelemetry export**: production tracing/export configuration beyond the deterministic execution-event store.
 - **Operations UI**: turn the included offline-capable dashboard into a deployed, authenticated operator surface.

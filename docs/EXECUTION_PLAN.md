@@ -90,10 +90,17 @@ architecture/design-decisions/failure-modes/roadmap/security expanded; AGENTS.md
 updated; `croniter` + `alembic` + `psycopg` added to requirements/pyproject;
 Makefile gains a `migrate` target.
 
-## What's Next
+## Subsequent Delivery and Remaining Boundaries
 
-1. Parallel execution of independent steps within a run (thread/async pool).
-2. Production deployment validation for PostgreSQL, Redis, and Celery.
-3. Multi-tenant security and distributed rate limiting beyond the local opt-in controls.
-4. Typed step-I/O contract for piping structured data between steps.
-5. Production OpenTelemetry export/operations integration.
+This historical record's former parallelism and typed-I/O follow-ups were delivered:
+
+1. **Opt-in bounded parallelism** runs independent ready steps concurrently when
+   `concurrency_limit > 1`; the default remains deterministic YAML-order execution.
+2. **Opt-in typed I/O** provides `TaskInput`, `TaskResult`, and `TaskRunner` while
+   preserving the established keyword-callable task contract by default.
+
+The remaining boundaries are operational rather than missing engine behavior:
+
+1. Production deployment validation for PostgreSQL, Redis, and Celery.
+2. Multi-tenant security and distributed rate limiting beyond the local opt-in controls.
+3. Production OpenTelemetry export/operations integration.
