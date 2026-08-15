@@ -1,10 +1,11 @@
 import pytest
-from shared_core.testing import MockDatabase, MockRedisClient
+
+from workflow_engine.internal.vendor_core.testing import MockDatabase, MockRedisClient
 
 
 @pytest.fixture
 def mock_db():
-    """In-memory SQLite database with the workflow schema (via shared_core)."""
+    """In-memory SQLite database with the vendored workflow schema."""
     db = MockDatabase()
     yield db
 

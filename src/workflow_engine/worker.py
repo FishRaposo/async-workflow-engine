@@ -10,7 +10,8 @@ broker is available, otherwise it runs the workflow inline.
 from typing import Any, Dict, Optional
 
 from loguru import logger
-from shared_core.tasks import create_celery_app
+
+from workflow_engine.internal.vendor_core.tasks import create_celery_app
 
 from .config import AppConfig
 from .db import get_storage, probe_database

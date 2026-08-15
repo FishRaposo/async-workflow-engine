@@ -32,7 +32,7 @@ flowchart TD
 - **Detection**: `GET /health` body; log line `Database unavailable (...) —
   falling back to in-memory storage.`
 - **Mitigation**: `make docker-up` then restart the API to re-probe. `pool_pre_ping=True`
-  (in `shared_core.database.DatabaseManager`) recovers stale connections.
+  (in the vendored `DatabaseManager`) recovers stale connections.
 - **Future**: periodic re-probe so the service upgrades to DB storage without a restart; `restart: unless-stopped` in compose.
 
 ## 2. Queue Backlog / Worker Starvation
@@ -43,7 +43,7 @@ flowchart TD
 - **Impact**: Tasks queue in Redis; runs stay in their last persisted state.
 - **Detection**: Redis `LLEN` on Celery queues; absent worker heartbeat;
   `task_track_started=True` and `task_time_limit=3600` are set in
-  `shared_core.tasks.create_celery_app`.
+  the vendored `create_celery_app`.
 - **Mitigation**: Tune `--concurrency`; the default sync path has no broker
   dependency at all.
 - **Future**: Flower dashboard; soft time limits; autoscaling workers.

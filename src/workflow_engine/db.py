@@ -11,8 +11,9 @@ services in the portfolio.
 from typing import Optional, Union
 
 from loguru import logger
-from shared_core.database import DatabaseManager
 from sqlalchemy import text
+
+from workflow_engine.internal.vendor_core.database import DatabaseManager
 
 from .config import AppConfig
 from .storage import InMemoryWorkflowStorage

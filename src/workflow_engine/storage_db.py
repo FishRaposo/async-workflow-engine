@@ -1,6 +1,6 @@
 """PostgreSQL-backed workflow run persistence (the default backend).
 
-Wired via ``shared_core.database.DatabaseManager``. The public surface mirrors
+Wired via the vendored ``DatabaseManager``. The public surface mirrors
 :class:`workflow_engine.storage.InMemoryWorkflowStorage` so the API can fall back
 to in-memory storage transparently when no database is reachable.
 """

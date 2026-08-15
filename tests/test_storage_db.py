@@ -1,6 +1,6 @@
 """DatabaseWorkflowStorage tests against a real in-memory SQLite DB.
 
-Uses ``shared_core.testing.MockDatabase`` so the full SQLAlchemy persistence
+Uses the vendored ``MockDatabase`` so the full SQLAlchemy persistence
 path (insert, query, relationship loading, JSON column) is exercised without a
 real PostgreSQL server.
 """

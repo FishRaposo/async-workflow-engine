@@ -2,14 +2,15 @@
 
 This document records the key architectural choices made during the development of the Async Workflow Engine, using a lightweight ADR (Architecture Decision Record) format.
 
-## Decision 1: Use of Shared Core Utilities
+## Decision 1: Vendor the Proven Utility Closure
 
-- **Context**: Every project in the showcase portfolio needs boilerplate code for database connections, logging configuration, Redis management, and error base classes. Duplicating this across 12 repositories creates maintenance burden and inconsistency.
+- **Context**: The engine needs configuration, database, Redis, logging, error, health, Celery, LLM, document-chunking, and test helpers while retaining an offline-first, independently installable distribution.
 - **Options**:
-  1. Duplicate the utilities inside each repository.
-  2. Implement a local package `shared-core` that projects can depend on via `pip install -e ../shared-core`.
-- **Choice**: Option 2.
-- **Tradeoff**: Increases alignment across repos and ensures a single bug-fix location. However, requires installing `shared-core` locally before working on any child repository, and the relative path install (`../shared-core`) won't work in isolated CI environments without a workaround (monorepo checkout, git submodule, or private PyPI).
+  1. Duplicate only the required utilities locally.
+  2. Depend on a sibling package or a Git URL.
+  3. Vendor the proven import closure under the engine's private namespace.
+- **Choice**: Option 3.
+- **Tradeoff**: The vendored code must be updated deliberately and carries third-party provenance, but `python -m pip install -e ".[dev]"`, CI, wheels, and offline execution have no sibling-repository or Git dependency. Heavy LLM providers and document parsers remain optional imports.
 
 ## Decision 2: Docker Compose for Local Isolation
 

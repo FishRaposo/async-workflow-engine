@@ -16,9 +16,9 @@ no DB, no broker required).
 Run from within `async-workflow-engine/` (use the venv's python):
 
 ```bash
-make install          # pip install -e ../shared-core[...] && pip install -e ".[dev]"
+make install          # python -m pip install -e ".[dev]"
 make dev              # uvicorn (src/workflow_engine/main.py:main)
-make test             # pytest (120 tests, no network/DB/broker needed)
+make test             # pytest (125 tests, no network/DB/broker needed)
 make lint             # ruff check src/workflow_engine tests examples alembic
 make format           # ruff format ...
 make typecheck        # pyright src/
@@ -73,6 +73,7 @@ startup (`probe_database`) to select the storage backend. Routes:
 | `worker.py` | Celery app + `run_workflow_task`, `run_due_schedules` (importable w/o broker) |
 | `config.py` | `AppConfig(BaseAppConfig)` |
 | `errors.py` | Re-exports `application_error_handler` |
+| `internal/vendor_core/` | Package-private v1.3.0 infrastructure import closure; see `THIRD_PARTY_NOTICES.md` |
 
 `alembic/versions/0001_initial_schema.py` creates both tables.
 
@@ -100,9 +101,9 @@ startup (`probe_database`) to select the storage backend. Routes:
 ## Tests
 
 `tests/` — parser, executor, tasks, scheduler, webhooks, dag, runner (in-memory +
-SQLite via `shared_core.testing.MockDatabase`), both storage backends, db probe,
+SQLite via the vendored `MockDatabase`), both storage backends, db probe,
 Celery worker (eager, no broker), every API endpoint (success + error), models,
-and a demo smoke test. 120 tests, all offline.
+and a demo smoke test. 125 tests, all offline.
 
 ## When to Update This File
 

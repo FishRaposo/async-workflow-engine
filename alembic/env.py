@@ -4,11 +4,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from shared_core.database import Base
 from sqlalchemy import create_engine
 
 from alembic import context
 from workflow_engine.config import AppConfig
+from workflow_engine.internal.vendor_core.database import Base
 from workflow_engine.models import StepExecution, WorkflowRun  # noqa: F401
 
 config = context.config

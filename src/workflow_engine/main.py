@@ -12,10 +12,14 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
-from shared_core.errors import BaseApplicationError, application_error_handler
-from shared_core.health import check_health
-from shared_core.logging import setup_logging
-from shared_core.redis import RedisManager
+
+from workflow_engine.internal.vendor_core.errors import (
+    BaseApplicationError,
+    application_error_handler,
+)
+from workflow_engine.internal.vendor_core.health import check_health
+from workflow_engine.internal.vendor_core.logging import setup_logging
+from workflow_engine.internal.vendor_core.redis import RedisManager
 
 from . import db as db_module
 from .config import AppConfig

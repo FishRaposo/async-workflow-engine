@@ -15,7 +15,7 @@ Milestones for the engine. Items marked ✅ are implemented in this MVP.
 
 ## Milestone 2: Asynchronous Scaling & Resilience ✅ (Completed)
 
-- ✅ **Celery dispatch**: `run_workflow_task` runs a full workflow in a background worker via `shared_core.tasks.create_celery_app`; importable without a broker. Opt-in per request or via `WORKFLOW_ASYNC`.
+- ✅ **Celery dispatch**: `run_workflow_task` runs a full workflow in a background worker via the vendored `create_celery_app`; importable without a broker. Opt-in per request or via `WORKFLOW_ASYNC`.
 - ✅ **Retry & backoff**: per-step `retries` enforced with capped exponential backoff (injectable sleep for tests).
 - ✅ **Dead-letter queue**: failed steps quarantined with error/attempts/params; queryable via `GET /workflows/dead-letters`.
 - ✅ **Conditional branching**: steps gated on prior results (`equals`/`contains`/`not_equals`); non-matching steps `SKIPPED` without deadlock.
@@ -38,7 +38,7 @@ Milestones for the engine. Items marked ✅ are implemented in this MVP.
 - **Celery-beat scheduling**: fire due schedules automatically instead of a manual tick.
 - **Persistent registries**: store schedules and webhook triggers in PostgreSQL so they survive restarts.
 - **Typed step I/O**: a contract for piping structured (validated) data between steps rather than stringified results.
-- **AuthN/AuthZ**: API authentication, webhook signature verification, per-workflow RBAC, rate limiting (`shared_core.ratelimit`).
-- **OpenTelemetry tracing**: spans from trigger → run → step via `shared_core.tracing`.
+- **AuthN/AuthZ**: API authentication, webhook signature verification, per-workflow RBAC, and rate limiting.
+- **OpenTelemetry tracing**: spans from trigger → run → step via a local tracing integration.
 - **Distributed locks**: `RedisManager` locks to prevent concurrent execution of the same scheduled workflow instance.
 - **Workflow versioning**: store and pin definition versions for reproducible reruns.

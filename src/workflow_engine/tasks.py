@@ -7,11 +7,11 @@ step's declared parameters from the YAML.
 
 The tasks are offline-first:
 
-* ``parse_text`` uses ``shared_core.docparse.chunk_text`` to produce real text
+* ``parse_text`` uses the vendored ``docparse.chunk_text`` to produce real text
   statistics — no network, no API key.
 * ``classify_with_llm`` mirrors the llm-cost-latency-monitor SDK pattern: a
   ``mocked_response`` short-circuit, else a real call through
-  ``shared_core.llm.LLMClientFactory`` when an API key is configured, with a
+  vendored ``LLMClientFactory`` when an API key is configured, with a
   graceful fallback to a deterministic simulated classification.
 * ``send_notification`` is a side-effect-free simulated dispatcher.
 """
@@ -21,7 +21,8 @@ import os
 from typing import Any, Dict, Optional
 
 from loguru import logger
-from shared_core.docparse import chunk_text
+
+from workflow_engine.internal.vendor_core.docparse import chunk_text
 
 
 def parse_text(
@@ -31,7 +32,7 @@ def parse_text(
     """Parse and chunk an input text, returning real statistics.
 
     Reads ``params['text']`` (or falls back to a sample), chunks it with
-    shared_core's deterministic chunker, and returns word/chunk counts. This is
+    the vendored deterministic chunker, and returns word/chunk counts. This is
     fully offline.
     """
     params = params or {}
@@ -83,7 +84,7 @@ def classify_with_llm(
     Resolution order (mirrors the llm-cost-latency-monitor SDK pattern):
 
     1. ``params['mocked_response']`` -> returned verbatim (deterministic tests).
-    2. A real LLM call via ``shared_core.llm.LLMClientFactory`` when an API key
+    2. A real LLM call via the vendored ``LLMClientFactory`` when an API key
        is present. ImportError or missing key falls through to (3).
     3. A deterministic offline simulation over ``params['labels']``.
     """
@@ -104,7 +105,7 @@ def classify_with_llm(
         try:
             import asyncio
 
-            from shared_core.llm import LLMClientFactory
+            from workflow_engine.internal.vendor_core.llm import LLMClientFactory
 
             model = params.get("model", "gpt-4o-mini")
             prompt = (

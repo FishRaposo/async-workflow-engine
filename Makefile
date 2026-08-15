@@ -1,8 +1,7 @@
 .PHONY: install dev test lint format typecheck docker-up docker-down demo migrate worker clean
 
 install:
-	pip install -e ../shared-core[dev,docparse,embeddings]
-	pip install -e ".[dev]"
+	python -m pip install -e ".[dev]"
 
 dev:
 	python src/workflow_engine/main.py

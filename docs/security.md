@@ -65,8 +65,7 @@ trigger surface (webhooks, schedules). This reflects the implemented system.
 
 - **No API authentication / authorization** on any endpoint.
 - **In-memory webhook/schedule registries** — not access-controlled, lost on restart.
-- **No rate limiting** on trigger endpoints (`shared_core.ratelimit` is available
-  to add).
+- **No rate limiting** on trigger endpoints.
 - **No multi-tenancy / per-workflow RBAC.**
 
 These are appropriate for a showcase but must be closed before any production use.

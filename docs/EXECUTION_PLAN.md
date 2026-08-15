@@ -31,7 +31,7 @@ a fully-implemented, tested, documented MVP, and what remains.
 
 ### Real tasks (offline-first, real-when-keyed)
 
-- `parse_text` — real text stats via `shared_core.docparse.chunk_text`.
+- `parse_text` — real text stats via the vendored `docparse.chunk_text`.
 - `classify_with_llm` — mirrors the llm-cost-latency-monitor SDK pattern:
   `mocked_response` short-circuit → real `LLMClientFactory` call when a key is
   set → deterministic offline simulation. ImportError/no-key fall through cleanly.
@@ -93,4 +93,4 @@ Makefile gains a `migrate` target.
 3. Persist schedule/webhook registries (survive restart).
 4. Typed step-I/O contract for piping structured data between steps.
 5. AuthN/AuthZ on the API and per-workflow RBAC.
-6. OpenTelemetry spans from trigger → run → step (shared_core.tracing).
+6. OpenTelemetry spans from trigger → run → step (a future local tracing layer).

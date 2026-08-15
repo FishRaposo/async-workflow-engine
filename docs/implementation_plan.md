@@ -20,13 +20,14 @@ The repository is structured as a standalone project conforming to operator work
 * **`src/workflow_engine/worker.py`**: Celery application orchestrating async task execution workers.
 * **`src/workflow_engine/storage.py`**: Handles state persistence of workflow runs, step durations, and execution results.
 
-### 2.2 Shared Core Dependencies
-This service imports standard layers from `shared-core` (sibling dependency library):
-* `shared_core.config.BaseAppConfig`: Settings parsing, reading configs from `.env`.
-* `shared_core.database.DatabaseManager`: SQL database engine instantiation and session factories.
-* `shared_core.redis.RedisManager`: Caching connections and health checks.
-* `shared_core.logging.setup_logging`: Structured log formats and correlation ID tracing.
-* `shared_core.errors.BaseApplicationError`: Exception mapping and global handlers.
+### 2.2 Vendored Runtime Dependencies
+This service ships its required infrastructure closure privately under
+`workflow_engine.internal.vendor_core`:
+* `config.BaseAppConfig`: Settings parsing, reading configs from `.env`.
+* `database.DatabaseManager`: SQL database engine instantiation and session factories.
+* `redis.RedisManager`: Caching connections and health checks.
+* `logging.setup_logging`: Structured log formats and correlation ID tracing.
+* `errors.BaseApplicationError`: Exception mapping and global handlers.
 
 ---
 

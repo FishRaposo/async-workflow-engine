@@ -13,7 +13,7 @@ Backend systems constantly coordinate multi-step processes — data ingestion, l
 
 This project builds those mechanics from first principles: topological dependency resolution, a step state machine, retry-with-backoff, conditional branching, cron scheduling, webhook triggers, a dead-letter queue, and background dispatch via Celery — all wired through a FastAPI surface that exposes everything a dashboard needs.
 
-It is **offline-first**: it runs and tests with no API keys, no database, and no message broker, using deterministic simulations. When a PostgreSQL DB, a Redis broker, or an LLM API key *is* present, the real paths light up automatically.
+It is **offline-first**: it runs and tests with no API keys, no database, and no message broker, using deterministic simulations. When a PostgreSQL DB, a Redis broker, or an LLM API key with the `llm` extra *is* present, the real paths light up automatically.
 
 ## What It Demonstrates
 
@@ -21,10 +21,10 @@ It is **offline-first**: it runs and tests with no API keys, no database, and no
 - **Conditional branching** — a step runs only when a prior step's result satisfies a declared condition (`equals` / `contains` / `not_equals`); otherwise it is `SKIPPED` without deadlocking downstream steps.
 - **Dead-letter queue** — every step that exhausts its retries is quarantined with its error, attempts, and params for inspection and rerun.
 - **PostgreSQL persistence by default, in-memory fallback** — a startup DB probe selects `DatabaseWorkflowStorage`; if no DB is reachable it transparently falls back to `InMemoryWorkflowStorage`, so tests and the demo need no database. Alembic migrations ship for both tables.
-- **Real Celery dispatch** — `run_workflow_task` runs a full workflow in the background via `shared_core.tasks.create_celery_app`, importable with no broker running.
+- **Real Celery dispatch** — `run_workflow_task` runs a full workflow in the background via the vendored `create_celery_app`, importable with no broker running.
 - **Cron scheduling** — `WorkflowScheduler` (croniter-backed) registers workflows on a cron expression and computes which are due.
 - **Webhook triggers** — register a workflow under a name and fire it with `POST /webhooks/{name}`.
-- **Real task implementations** — `parse_text` (via `shared_core.docparse`), `classify_with_llm` (mock → real LLM via `shared_core.llm.LLMClientFactory` → deterministic simulation), and `send_notification`.
+- **Real task implementations** — `parse_text` (via the vendored document chunker), `classify_with_llm` (mock → real LLM via the vendored `LLMClientFactory` → deterministic simulation), and `send_notification`.
 - **Dashboard-ready API** — run/rerun/list/inspect runs, a `{nodes, edges, status}` DAG projection, schedules, webhooks, and the dead-letter queue.
 
 ## Architecture
@@ -77,16 +77,15 @@ See [docs/architecture.md](docs/architecture.md) for sequence and state diagrams
 | **Cache/Broker** | Redis 7 | Celery broker + health check target |
 | **ORM** | SQLAlchemy 2.0+ | Persistence + connection pooling |
 | **Logging** | Loguru 0.7+ | Structured, step-level execution tracing |
-| **Shared Library** | `shared-core` v1.3.0 | config, database, redis, logging, errors, health, tasks, llm, docparse |
+| **Vendored runtime** | archived v1.3.0 import closure | config, database, redis, logging, errors, health, tasks, llm, docparse |
 
 ## Local Setup
 
 ```bash
 cd async-workflow-engine
 
-# 1. Create a venv and install (installs shared-core first)
+# 1. Create a venv and install the self-contained package
 python -m venv .venv
-.venv/Scripts/python -m pip install -e ../shared-core[dev,docparse,embeddings]
 .venv/Scripts/python -m pip install -e ".[dev]"
 
 # 2. (Optional) start infrastructure for the DB/broker paths
@@ -106,9 +105,13 @@ make demo
 |------|-----|
 | Persist runs to PostgreSQL | `DATABASE_URL` reachable + run `alembic upgrade head` |
 | Background dispatch | `make docker-up`, run a Celery worker, send `async_dispatch=true` or set `WORKFLOW_ASYNC=1` |
-| Real LLM classification | `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` |
+| Real LLM classification | `python -m pip install -e ".[dev,llm]"` + `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` |
+| PDF, DOCX, or HTML document parsing | `python -m pip install -e ".[document-parsers]"` |
 
-Everything works with **none** of these set — the engine falls back to in-memory storage, synchronous dispatch, and deterministic classification.
+Everything works with **none** of these set — the engine falls back to in-memory
+storage, synchronous dispatch, and deterministic classification. Deterministic
+plain-text chunking is always part of the base runtime; only heavyweight document
+formats and hosted LLM providers are optional.
 
 ## Demo
 
@@ -124,7 +127,7 @@ The demo runs five scenarios fully offline and asserts each: (1) a conditional-b
 make test            # pytest
 ```
 
-Coverage spans every core module — parser (validation, conditions, cycles), executor (linear/fan-out/diamond DAGs, retries, branching, DLQ, hooks), scheduler, webhooks, DAG projection, runner (end-to-end against in-memory **and** SQLite stores via `shared_core.testing.MockDatabase`), both storage backends, the DB probe, the Celery worker (eager, no broker), every API endpoint (success + error paths), and a smoke test that the demo runs. No test needs a network, a real database, or a broker.
+Coverage spans every core module — parser (validation, conditions, cycles), executor (linear/fan-out/diamond DAGs, retries, branching, DLQ, hooks), scheduler, webhooks, DAG projection, runner (end-to-end against in-memory **and** SQLite stores via the vendored `MockDatabase`), both storage backends, the DB probe, the Celery worker (eager, no broker), every API endpoint (success + error paths), and a smoke test that the demo runs. No test needs a network, a real database, or a broker.
 
 ## API Reference
 
@@ -173,4 +176,4 @@ See [docs/roadmap.md](docs/roadmap.md). Highlights: parallel fan-out execution, 
 
 ## Related Projects
 
-A **Wave 1** project in the AI Infrastructure Showcase Portfolio. It shares `shared-core` (config, database, redis, logging, errors, health, tasks, llm, docparse) with the rest of the portfolio and provides orchestration patterns reused by the agent and document-pipeline projects.
+A **Wave 1** project in the AI Infrastructure Showcase Portfolio. It vendors the proven infrastructure import closure it needs (config, database, redis, logging, errors, health, tasks, llm, docparse), so its installation and offline behavior are independent of sibling repositories.

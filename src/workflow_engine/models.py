@@ -1,13 +1,18 @@
 """SQLAlchemy models for workflow runs and step executions.
 
-These map onto the ``shared_core.database.Base`` metadata so alembic and the
-shared ``DatabaseManager`` pick them up automatically.
+These map onto the vendored ``Base`` metadata so Alembic and the local
+``DatabaseManager`` pick them up automatically.
 """
 
-from shared_core.database import Base, TimestampMixin, UUIDMixin
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.types import JSON
+
+from workflow_engine.internal.vendor_core.database import (
+    Base,
+    TimestampMixin,
+    UUIDMixin,
+)
 
 
 class WorkflowRun(Base, UUIDMixin, TimestampMixin):

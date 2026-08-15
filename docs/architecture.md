@@ -26,22 +26,22 @@ The engine is intentionally built from first principles—no Airflow, no Prefect
 | `config.py` | Project-specific configuration | `AppConfig` (extends `BaseAppConfig`) |
 | `errors.py` | Structured error response handler | `application_error_handler()` |
 
-### Shared Core Dependencies
+### Vendored Runtime Dependencies
 
-Imported from `shared-core` (sibling library):
+Imported from the package-private `workflow_engine.internal.vendor_core` namespace:
 
 | Module | Used In | Purpose |
 |--------|---------|---------|
-| `shared_core.config.BaseAppConfig` | `config.py` | Base settings (`DATABASE_URL`, `REDIS_URL`, Celery, LLM keys) |
-| `shared_core.database.DatabaseManager` | `db.py`, `main.py` | SQLAlchemy session factory + pooling |
-| `shared_core.redis.RedisManager` | `main.py` | Redis wrapper with `ping()` health check |
-| `shared_core.logging.setup_logging` | `main.py` | Loguru configuration with service tagging |
-| `shared_core.errors` | `main.py`, `errors.py` | `BaseApplicationError` + `application_error_handler` |
-| `shared_core.health.check_health` | `main.py` | DB + Redis health probe |
-| `shared_core.tasks.create_celery_app` | `worker.py` | Celery app bootstrap |
-| `shared_core.docparse.chunk_text` | `tasks.py` | Real text chunking in `parse_text` |
-| `shared_core.llm.LLMClientFactory` | `tasks.py` | Real LLM path in `classify_with_llm` (when keyed) |
-| `shared_core.testing.MockDatabase` | tests | In-memory SQLite for storage tests |
+| `config.BaseAppConfig` | `config.py` | Base settings (`DATABASE_URL`, `REDIS_URL`, Celery, LLM keys) |
+| `database.DatabaseManager` | `db.py`, `main.py` | SQLAlchemy session factory + pooling |
+| `redis.RedisManager` | `main.py` | Redis wrapper with `ping()` health check |
+| `logging.setup_logging` | `main.py` | Loguru configuration with service tagging |
+| `errors` | `main.py`, `errors.py` | `BaseApplicationError` + `application_error_handler` |
+| `health.check_health` | `main.py` | DB + Redis health probe |
+| `tasks.create_celery_app` | `worker.py` | Celery app bootstrap |
+| `docparse.chunk_text` | `tasks.py` | Real text chunking in `parse_text` |
+| `llm.LLMClientFactory` | `tasks.py` | Real LLM path in `classify_with_llm` (when keyed) |
+| `testing.MockDatabase` | tests | In-memory SQLite for storage tests |
 
 ## Data Flow
 
@@ -144,7 +144,7 @@ stateDiagram-v2
 
 ```python
 TASK_REGISTRY = {
-    "parse_text": parse_text,              # real text stats via shared_core.docparse
+    "parse_text": parse_text,              # real text stats via vendored docparse
     "classify_with_llm": classify_with_llm,  # mock -> real LLM -> offline simulation
     "send_notification": send_notification,   # simulated dispatch
     "always_fail": always_fail,               # exercises retries / DLQ
@@ -180,7 +180,7 @@ Schema (created by Alembic migration `0001_initial_schema`):
 
 ## Background Jobs
 
-`worker.py` builds a Celery app via `shared_core.tasks.create_celery_app` and
+`worker.py` builds a Celery app via the vendored `create_celery_app` and
 defines `run_workflow_task`, which runs a **whole workflow** (probe → storage →
 `runner.run_workflow`) in the background. It is importable with no broker
 running, so the API and tests import it freely. Dispatch is opt-in
