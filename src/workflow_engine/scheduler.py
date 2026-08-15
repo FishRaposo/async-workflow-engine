@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover - croniter is a declared dependency
 
 def is_valid_cron(expression: str) -> bool:
     """Return True if ``expression`` is a valid cron expression."""
-    if not _HAS_CRONITER:
+    if croniter is None:
         # Minimal structural fallback: 5 whitespace-separated fields.
         return len(expression.split()) == 5
     return bool(croniter.is_valid(expression))
@@ -38,7 +38,7 @@ def is_valid_cron(expression: str) -> bool:
 def next_run_time(expression: str, after: Optional[datetime] = None) -> datetime:
     """Compute the next fire time for a cron expression after ``after``."""
     base = after or datetime.now(timezone.utc)
-    if not _HAS_CRONITER:  # pragma: no cover - dependency present in CI
+    if croniter is None:  # pragma: no cover - dependency present in CI
         raise RuntimeError("croniter is required to compute next run times")
     return croniter(expression, base).get_next(datetime)
 

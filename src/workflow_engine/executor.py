@@ -150,7 +150,7 @@ class WorkflowExecutor:
         logger.info(f"Running step {step.id} (task: {step.task})...")
         self.statuses[step.id] = RUNNING
         self._trace("step.started", step)
-        task_fn = self.task_registry.get(step.task)
+        task_fn = self.task_registry[step.task]
         context = dict(self.results)
         succeeded = self._run_with_retry(step, task_fn, context)
         self._trace(
@@ -173,7 +173,7 @@ class WorkflowExecutor:
                 step.id: pool.submit(
                     self._run_with_retry,
                     step,
-                    self.task_registry.get(step.task),
+                    self.task_registry[step.task],
                     dict(self.results),
                     False,
                 )

@@ -10,8 +10,6 @@
   "venvPath": ".",
   "venv": ".venv",
   "pythonVersion": "3.10",
-  "analysis": {
-    "typeCheckingMode": "basic",
-    "useLibraryCodeForTypes": true
-  }
+  "typeCheckingMode": "basic",
+  "useLibraryCodeForTypes": true
 }

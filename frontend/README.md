@@ -17,7 +17,7 @@ schedules.
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev          # http://localhost:3000
 ```
 

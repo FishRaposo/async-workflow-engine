@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections.abc import Iterable
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -11,6 +12,15 @@ MODEL_COSTS = {
     "claude-3-5-sonnet": (3.0, 15.0),
     "claude-3-haiku": (0.25, 1.25),
 }
+
+
+def _first_textual_content(blocks: Iterable[object]) -> str:
+    """Return the first text block while safely ignoring tool-use responses."""
+    for block in blocks:
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            return text
+    return ""
 
 
 def estimate_llm_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
@@ -149,7 +159,7 @@ class LLMClientFactory:
         )
         latency = (time.perf_counter() - start_time) * 1000
 
-        text = response.content[0].text if response.content else ""
+        text = _first_textual_content(response.content)
         prompt_tokens = response.usage.input_tokens
         completion_tokens = response.usage.output_tokens
         total_tokens = prompt_tokens + completion_tokens

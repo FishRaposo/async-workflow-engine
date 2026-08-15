@@ -30,3 +30,12 @@ build/
 # Reproducible portfolio evidence is generated locally; the normalized golden
 # fixture under tests/ is the committed contract.
 artifacts/portfolio/async-workflow-engine-evidence/
+
+# Frontend generated output (the frontend's own ignore protects local use; these
+# root entries protect repository-wide commands and CI artifact collection).
+frontend/node_modules/
+frontend/.next/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+frontend/tsconfig.tsbuildinfo

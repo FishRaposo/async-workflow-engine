@@ -5,13 +5,14 @@ import uuid
 from contextlib import asynccontextmanager
 from functools import wraps
 from inspect import iscoroutinefunction
-from typing import Any, NoReturn, Optional
+from typing import Any, NoReturn, Optional, cast
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
+from starlette.types import ExceptionHandler
 
 from workflow_engine.internal.vendor_core.errors import (
     BaseApplicationError,
@@ -82,8 +83,8 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=config.APP_NAME, version="1.0.0", lifespan=lifespan)
-app.add_exception_handler(  # type: ignore[arg-type]
-    BaseApplicationError, application_error_handler
+app.add_exception_handler(
+    BaseApplicationError, cast(ExceptionHandler, application_error_handler)
 )
 
 
