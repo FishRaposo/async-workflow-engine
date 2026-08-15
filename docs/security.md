@@ -40,8 +40,9 @@ trigger surface (webhooks, schedules). This reflects the implemented system.
   callers cannot inject a definition through the trigger path.
 - **Validated cron**: `POST /schedules` rejects invalid cron expressions
   (croniter validation) and validates the workflow YAML before registering.
-- **No payload execution**: Webhook request bodies are not interpreted as code or
-  merged into the definition; they are available to the workflow as inert data.
+- **No payload execution**: Webhook request bodies are read only to verify an
+  optional HMAC signature. They are not interpreted as code, merged into the
+  definition, or exposed to workflow steps.
 - **Optional HMAC verification**: a registration can carry a secret; when it does,
   `POST /webhooks/{name}` requires a valid `X-Hub-Signature-256` value before
   dispatch. A webhook with no registered secret intentionally remains open in the
@@ -58,8 +59,11 @@ trigger surface (webhooks, schedules). This reflects the implemented system.
   `step_executions`) with the original YAML stored to enable rerun. The
   `dead_letters` column and step `result`/`error` may contain task output — if
   workflows process PII, those columns must be encrypted at rest and access-controlled.
-- **Schema migrations**: Alembic owns the schema; `create_tables()` is used only
-  for the offline/test fast path.
+- **Schema migrations**: Alembic owns versioned schema changes and operators must
+  run `alembic upgrade head`. After a successful database connectivity probe, the
+  current startup path also calls `create_tables()` for compatibility with a fresh
+  database; that creates mapped tables but is not a substitute for applying the
+  Alembic revision chain.
 
 ---
 
@@ -70,6 +74,10 @@ trigger surface (webhooks, schedules). This reflects the implemented system.
   managed `WORKFLOW_API_KEYS` mapping.
 - **Rate limiting** is implemented only as a process-local limiter and is disabled
   at `WORKFLOW_RATE_LIMIT=0`; it is not a distributed production limiter.
+  Recognized configured API keys receive key-scoped buckets. Missing or unknown
+  keys are scoped to the request client identity, so an open-auth deployment cannot
+  evade a bucket by supplying arbitrary key strings. Bucket updates are serialized
+  within the process.
 - **Runtime persistence** is durable only with reachable PostgreSQL. Offline
   schedules, webhooks, versions, idempotency claims, and execution events are
   process-local and are lost on restart.
@@ -78,3 +86,14 @@ trigger surface (webhooks, schedules). This reflects the implemented system.
 
 These boundaries preserve an offline demo while making production hardening an
 explicit deployment responsibility.
+
+## 6. Frontend Dependency Audit Boundary
+
+On 2026-08-15, `npm audit` reported 16 locked frontend findings (8 moderate,
+7 high, 1 critical), including development-tooling chains. The production image
+uses `npm ci --omit=dev`, so Vitest, Vite, Playwright, and ESLint tooling does not
+ship in its runtime layer. This does not make the runtime audit clean:
+`npm audit --omit=dev` still reported 3 high findings through the locked Next.js
+14/PostCSS/nanoid production tree, with no clean in-range fix offered. A hosted
+dashboard deployment and the major framework upgrade needed to clear those findings
+remain deferred; no zero-vulnerability or production-hardened frontend claim is made.

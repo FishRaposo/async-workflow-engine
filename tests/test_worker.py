@@ -5,6 +5,9 @@ Celery tasks are invoked directly (the underlying ``.run``) and via ``.apply()``
 falls back to in-memory storage, then delegates to the shared runner.
 """
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import workflow_engine.db as db_module
 from workflow_engine.worker import (
     celery_app,
@@ -40,3 +43,55 @@ def test_run_workflow_task_with_run_id(monkeypatch):
 def test_run_due_schedules_callable():
     result = run_due_schedules.apply().get()
     assert result == {"dispatched": []}
+
+
+def test_due_schedule_tick_probes_before_resolving_cross_process_services(
+    monkeypatch,
+):
+    from workflow_engine import worker as worker_module
+
+    offline_scheduler = MagicMock()
+    offline_scheduler.dispatch_due.return_value = []
+    durable_scheduler = MagicMock()
+    durable_scheduler.dispatch_due.return_value = [
+        {"name": "api-created", "run_id": "run-1"}
+    ]
+    offline = SimpleNamespace(scheduler=offline_scheduler, idempotency=object())
+    durable = SimpleNamespace(scheduler=durable_scheduler, idempotency=object())
+    monkeypatch.setenv("WORKFLOW_CELERY_BEAT", "1")
+    monkeypatch.setattr(db_module, "db_available", False)
+
+    def probe(config):
+        db_module.db_available = True
+        return True
+
+    monkeypatch.setattr(worker_module, "probe_database", probe)
+    monkeypatch.setattr(
+        worker_module,
+        "get_runtime_services",
+        lambda: durable if db_module.db_available else offline,
+    )
+
+    result = run_due_schedules.run()
+
+    assert result == {"dispatched": [{"name": "api-created", "run_id": "run-1"}]}
+    durable_scheduler.dispatch_due.assert_called_once()
+    offline_scheduler.dispatch_due.assert_not_called()
+
+
+def test_worker_and_due_run_forward_configured_concurrency_limit(monkeypatch):
+    from workflow_engine import worker as worker_module
+
+    services = SimpleNamespace(versions=MagicMock(), events=MagicMock())
+    services.versions.get.return_value = object()
+    run = MagicMock(return_value={"status": "completed", "run_id": "run-1"})
+    monkeypatch.setattr(worker_module.config, "WORKFLOW_CONCURRENCY_LIMIT", 4)
+    monkeypatch.setattr(worker_module, "probe_database", lambda config: False)
+    monkeypatch.setattr(worker_module, "get_runtime_services", lambda: services)
+    monkeypatch.setattr(worker_module, "get_storage", lambda config: object())
+    monkeypatch.setattr(worker_module, "run_workflow", run)
+
+    run_workflow_task.run(LINEAR)
+    worker_module._run_due_definition(LINEAR)
+
+    assert [call.kwargs["concurrency_limit"] for call in run.call_args_list] == [4, 4]

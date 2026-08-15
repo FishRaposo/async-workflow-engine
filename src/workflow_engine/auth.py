@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import IntEnum
+from threading import Lock
 from time import monotonic
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 
 class Role(IntEnum):
@@ -31,17 +32,24 @@ class AuthPolicy:
 class LocalRateLimiter:
     limit: int
     window_seconds: float
+    recognized_api_keys: set[str] = field(default_factory=set)
     _buckets: Dict[str, tuple[float, int]] = field(default_factory=dict, init=False)
+    _lock: Any = field(default_factory=Lock, init=False, repr=False)
 
     def allow(
         self, *, api_key: Optional[str] = None, client_id: Optional[str] = None
     ) -> bool:
-        bucket = api_key or client_id or "anonymous"
-        now = monotonic()
-        window_start, count = self._buckets.get(bucket, (now, 0))
-        if now - window_start >= self.window_seconds:
-            window_start, count = now, 0
-        if count >= self.limit:
-            return False
-        self._buckets[bucket] = (window_start, count + 1)
-        return True
+        bucket = (
+            f"key:{api_key}"
+            if api_key and api_key in self.recognized_api_keys
+            else f"client:{client_id or 'anonymous'}"
+        )
+        with self._lock:
+            now = monotonic()
+            window_start, count = self._buckets.get(bucket, (now, 0))
+            if now - window_start >= self.window_seconds:
+                window_start, count = now, 0
+            if count >= self.limit:
+                return False
+            self._buckets[bucket] = (window_start, count + 1)
+            return True

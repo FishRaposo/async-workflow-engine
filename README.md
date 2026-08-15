@@ -128,7 +128,7 @@ The demo runs five scenarios fully offline and asserts each: (1) a conditional-b
 make test            # pytest
 ```
 
-The verified Python suite has **193 tests**. It covers parser validation, dependency resolution, retries, branching, DLQ, runtime persistence, versioning, idempotency, optional security controls, migrations, the Celery worker in eager mode, and every API endpoint. The dashboard has **25 Vitest tests** and **6 Chromium smoke checks**. These automated checks run without a live PostgreSQL, Redis, Celery worker, or hosted LLM.
+The verified Python suite has **203 tests**. It covers parser validation, dependency resolution, retries, branching, DLQ, runtime persistence, versioning, idempotency, optional security controls, migrations, the Celery worker in eager mode, and every API endpoint. The dashboard has **25 Vitest tests** and **6 Chromium smoke checks**. These automated checks run without a live PostgreSQL, Redis, Celery worker, or hosted LLM.
 
 The finalization evidence is reproducible by `make evidence-check`; the normalized evidence hash is `7a2584c22d4d91fbf9368194d068e94ced6dd149f87aa72e46f88f4dc4581029`. Wheel installation/import, SQLite migrations, and forbidden-dependency scans are separate green CI gates. Docker was not available on the finalization machine; Compose configuration and the frontend container build remain CI gates, not locally verified infrastructure.
 
@@ -177,6 +177,7 @@ The finalization evidence is reproducible by `make evidence-check`; the normaliz
 2. **Offline runtime state is process-local** — schedules, webhooks, versions, idempotency claims, and execution events become durable only after the PostgreSQL probe succeeds.
 3. **Security controls are local, opt-in primitives** — API-key roles, rate limits, locks, and webhook HMAC are implemented but require deliberate configuration and production-grade key/network/observability operations.
 4. **Async dispatch needs a live broker** — `async_dispatch=true` requires a running Celery worker + Redis; otherwise use the default synchronous path.
+5. **Frontend deployment is deferred** — the production image excludes development dependencies, but the 2026-08-15 `npm audit --omit=dev` still reports 3 high findings in the locked Next.js 14 production tree. The offline dashboard is not presented as a production-hardened hosted service.
 
 ## Roadmap
 

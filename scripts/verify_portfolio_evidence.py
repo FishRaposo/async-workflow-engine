@@ -126,8 +126,8 @@ def verify_evidence(output_dir: str | Path) -> dict[str, Any]:
         expected_manifest
     ) + b"\n":
         raise EvidenceVerificationError("Manifest JSON is not canonical")
-    report = (directory / "report.md").read_text(encoding="utf-8")
-    if report != _expected_report(golden, reproducibility_hash):
+    report = (directory / "report.md").read_bytes()
+    if report != _expected_report(golden, reproducibility_hash).encode("utf-8"):
         raise EvidenceVerificationError(
             "Markdown report does not match normalized evidence"
         )

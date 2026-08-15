@@ -8,10 +8,15 @@ from typing import Dict, Optional
 
 import yaml
 
+from .parser import WorkflowValidationError
+
 
 def canonical_yaml_hash(yaml_definition: str) -> str:
     """Hash YAML data, not incidental key ordering or whitespace."""
-    parsed = yaml.safe_load(yaml_definition)
+    try:
+        parsed = yaml.safe_load(yaml_definition)
+    except yaml.YAMLError as exc:
+        raise WorkflowValidationError(f"Invalid YAML: {exc}") from exc
     canonical = yaml.safe_dump(
         parsed, sort_keys=True, default_flow_style=False, allow_unicode=True
     )

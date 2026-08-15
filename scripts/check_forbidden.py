@@ -1,4 +1,4 @@
-"""Reject retired dependencies and credential-shaped values in tracked code."""
+"""Reject retired dependencies and credential-shaped values in tracked text."""
 
 from __future__ import annotations
 
@@ -9,33 +9,20 @@ import sys
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PATHS = (
-    ".github",
-    "alembic",
-    "examples",
-    "scripts",
-    "src",
-    "frontend/.env.example",
-    "frontend/.dockerignore",
-    "frontend/.gitignore",
-    "frontend/.eslintrc.json",
-    "frontend/Dockerfile",
-    "frontend/next.config.js",
-    "frontend/package.json",
-    "frontend/playwright.config.ts",
-    "frontend/postcss.config.js",
-    "frontend/src",
-    "frontend/tailwind.config.ts",
-    "frontend/tsconfig.json",
-    "frontend/vitest.config.ts",
-    "docker-compose.yml",
-    "Makefile",
-    "pyproject.toml",
+EXCLUDED_TRACKED_PREFIXES = (
+    ".commandcode/",
+    ".superpowers/",
 )
-TRACKED_ENVIRONMENT_PATHS = (
-    ":(glob).env*",
-    ":(glob)frontend/.env*",
-)
+ALLOWED_PATTERN_PATHS = {
+    # These files exercise or disclose the retired dependency text intentionally.
+    "retired shared_core dependency": {
+        "tests/test_self_containment.py",
+        "tests/test_tooling_contracts.py",
+        "THIRD_PARTY_NOTICES.md",
+    },
+    # The tooling contract constructs a synthetic token to prove detection.
+    "GitHub token": {"tests/test_tooling_contracts.py"},
+}
 PATTERNS = {
     "retired shared_core dependency": re.compile(
         r"\b(?:from|import)\s+shared" r"_core\b|shared" r"-core",
@@ -48,53 +35,40 @@ PATTERNS = {
 
 
 def _files(root: Path) -> list[Path]:
-    """Return the checked source/configuration files under ``root``."""
+    """Return tracked text/config candidates, excluding local agent reports."""
     if root != REPOSITORY_ROOT:
         return sorted(path for path in root.rglob("*") if path.is_file())
 
-    files: list[Path] = []
-    for relative in DEFAULT_PATHS:
-        candidate = root / relative
-        if candidate.is_file():
-            files.append(candidate)
-        elif candidate.is_dir():
-            files.extend(path for path in candidate.rglob("*") if path.is_file())
-    files.extend(_tracked_environment_files(root))
-    return sorted(set(files))
-
-
-def _tracked_environment_files(root: Path) -> list[Path]:
-    """Return tracked environment files without scanning ignored local credentials."""
     result = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(root),
-            "ls-files",
-            "--cached",
-            "--",
-            *TRACKED_ENVIRONMENT_PATHS,
-        ],
+        ["git", "-C", str(root), "ls-files", "--cached"],
         check=False,
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
         return []
-    return [root / line for line in result.stdout.splitlines() if line]
+    return sorted(
+        root / relative
+        for relative in result.stdout.splitlines()
+        if relative
+        and not relative.replace("\\", "/").startswith(EXCLUDED_TRACKED_PREFIXES)
+    )
 
 
 def find_violations(root: Path) -> list[str]:
     """Return deterministic descriptions for every forbidden value found."""
     violations: list[str] = []
     for path in _files(root):
+        relative = path.relative_to(root).as_posix()
         try:
             contents = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
         for label, pattern in PATTERNS.items():
-            if pattern.search(contents):
-                violations.append(f"{path.relative_to(root).as_posix()}: {label}")
+            if pattern.search(contents) and relative not in ALLOWED_PATTERN_PATHS.get(
+                label, set()
+            ):
+                violations.append(f"{relative}: {label}")
     return violations
 
 

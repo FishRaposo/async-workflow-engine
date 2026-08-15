@@ -195,6 +195,37 @@ def test_forbidden_scan_checks_tracked_frontend_environment_files(
     ]
 
 
+def test_forbidden_scan_covers_tracked_text_outside_the_old_path_allowlist(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "README.md").write_text(
+        "accidentally committed token ghp_" + "a" * 30 + "\n", encoding="utf-8"
+    )
+    reports = repository / ".superpowers" / "sdd"
+    reports.mkdir(parents=True)
+    (reports / "local.md").write_text(
+        "ignored token ghp_" + "b" * 30 + "\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "init", "--quiet", str(repository)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "add", "README.md", ".superpowers/sdd/local.md"],
+        check=True,
+    )
+
+    spec = importlib.util.spec_from_file_location(
+        "forbidden_scan_all_tracked_module",
+        REPO_ROOT / "scripts" / "check_forbidden.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "REPOSITORY_ROOT", repository)
+
+    assert module.find_violations(repository) == ["README.md: GitHub token"]
+
+
 def test_repository_forbidden_scan_passes() -> None:
     """The scanner does not reject its own patterns or approved repository code."""
     result = subprocess.run(

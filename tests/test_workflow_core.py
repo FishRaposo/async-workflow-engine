@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import threading
 import time
 
 from workflow_engine.auth import AuthPolicy, LocalRateLimiter, Role
@@ -227,10 +228,58 @@ def test_auth_is_open_by_default_and_enforces_roles_when_enabled():
 
 
 def test_local_rate_limiter_is_scoped_to_key_or_client():
-    limiter = LocalRateLimiter(limit=1, window_seconds=60)
+    limiter = LocalRateLimiter(limit=1, window_seconds=60, recognized_api_keys={"same"})
     assert limiter.allow(api_key="same") is True
     assert limiter.allow(api_key="same") is False
     assert limiter.allow(client_id="other-client") is True
+
+
+def test_unknown_rate_limit_keys_cannot_create_arbitrary_buckets():
+    limiter = LocalRateLimiter(
+        limit=1, window_seconds=60, recognized_api_keys={"recognized"}
+    )
+
+    assert limiter.allow(api_key="invented-one", client_id="client-a") is True
+    assert limiter.allow(api_key="invented-two", client_id="client-a") is False
+    assert limiter.allow(client_id="client-b") is True
+
+
+def test_local_rate_limiter_serializes_concurrent_bucket_updates():
+    class CoordinatedBuckets(dict):
+        def __init__(self):
+            super().__init__()
+            self.first_read = threading.Event()
+            self.second_read = threading.Event()
+            self.reads = 0
+
+        def get(self, key, default=None):
+            self.reads += 1
+            value = super().get(key, default)
+            if self.reads == 1:
+                self.first_read.set()
+                self.second_read.wait(timeout=0.1)
+            elif self.reads == 2:
+                self.second_read.set()
+            return value
+
+    limiter = LocalRateLimiter(limit=1, window_seconds=60)
+    limiter._buckets = CoordinatedBuckets()
+    start = threading.Barrier(3)
+    results: list[bool] = []
+
+    def attempt():
+        start.wait()
+        results.append(limiter.allow(client_id="one-client"))
+
+    threads = [threading.Thread(target=attempt) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait()
+    for thread in threads:
+        thread.join(timeout=1)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert sorted(results) == [False, True]
 
 
 def test_webhook_signature_and_idempotency_are_opt_in_contracts():

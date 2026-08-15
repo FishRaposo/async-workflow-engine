@@ -45,6 +45,7 @@ def _run_due_definition(yaml_definition: str) -> Dict[str, Any]:
         trace=TraceContext(),
         version_store=services.versions,
         event_store=services.events,
+        concurrency_limit=config.WORKFLOW_CONCURRENCY_LIMIT,
     )
 
 
@@ -54,6 +55,7 @@ def run_workflow_task(
     yaml_definition: str,
     run_id: Optional[str] = None,
     version_hash: Optional[str] = None,
+    concurrency_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Execute a workflow in the background and persist the result.
 
@@ -75,6 +77,11 @@ def run_workflow_task(
             version_store=services.versions,
             version_hash=version_hash,
             event_store=services.events,
+            concurrency_limit=(
+                config.WORKFLOW_CONCURRENCY_LIMIT
+                if concurrency_limit is None
+                else concurrency_limit
+            ),
         )
     except Exception as exc:  # pragma: no cover - retry path needs a live broker
         logger.error(f"Worker workflow execution failed: {exc}")
@@ -91,6 +98,7 @@ def run_due_schedules() -> Dict[str, Any]:
     if not _celery_beat_enabled():
         logger.info("run_due_schedules tick skipped (Celery beat disabled)")
         return {"dispatched": []}
+    probe_database(config)
     active_services = get_runtime_services()
     return {
         "dispatched": active_services.scheduler.dispatch_due(

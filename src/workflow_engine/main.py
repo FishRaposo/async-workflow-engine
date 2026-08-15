@@ -66,6 +66,7 @@ rate_limiter = (
     LocalRateLimiter(
         limit=config.WORKFLOW_RATE_LIMIT,
         window_seconds=config.WORKFLOW_RATE_LIMIT_WINDOW_SECONDS,
+        recognized_api_keys=set(auth_policy.api_keys),
     )
     if config.WORKFLOW_RATE_LIMIT > 0
     else None
@@ -229,7 +230,10 @@ def _dispatch(
 
             version = services_for_run.versions.put(yaml_definition)
             async_result = run_workflow_task.delay(
-                yaml_definition, run_id, version_hash or version.content_hash
+                yaml_definition,
+                run_id,
+                version_hash or version.content_hash,
+                config.WORKFLOW_CONCURRENCY_LIMIT,
             )
             return {
                 "dispatched": "async",
@@ -251,6 +255,7 @@ def _dispatch(
             version_store=services_for_run.versions,
             version_hash=version_hash,
             event_store=services_for_run.events,
+            concurrency_limit=config.WORKFLOW_CONCURRENCY_LIMIT,
         )
 
     if config.WORKFLOW_LOCKING_ENABLED:

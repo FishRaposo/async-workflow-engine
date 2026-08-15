@@ -54,6 +54,11 @@ def test_generator_is_reproducible_and_exercises_real_offline_capabilities(tmp_p
     assert (
         tmp_path / "first" / "checksums.sha256"
     ).read_bytes() == _canonical_checksums(tmp_path / "first")
+    expected_report = verifier._expected_report(
+        json.loads((tmp_path / "first" / "evidence.json").read_text("utf-8")),
+        first["reproducibility_hash"],
+    ).encode("utf-8")
+    assert (tmp_path / "first" / "report.md").read_bytes() == expected_report
     report = json.loads((tmp_path / "first" / "evidence.json").read_text())
     assert report["validation"]["cycle_refused"] is True
     assert report["validation"]["unknown_task_refused"] is True
@@ -214,6 +219,23 @@ def test_verifier_rejects_a_self_consistent_tampered_report(tmp_path):
     assert manifest["reproducibility_hash"] in (output / "report.md").read_text(
         encoding="utf-8"
     )
+    _rewrite_checksums(output)
+
+    with pytest.raises(verifier.EvidenceVerificationError):
+        verifier.verify_evidence(output)
+
+
+@pytest.mark.parametrize("mutation", ["crlf", "reformatted"])
+def test_verifier_rejects_self_consistent_noncanonical_report_bytes(tmp_path, mutation):
+    demo, verifier = _evidence_modules()
+    output = tmp_path / f"report-{mutation}"
+    demo.generate_evidence(output)
+    report = (output / "report.md").read_bytes()
+    if mutation == "crlf":
+        report = report.replace(b"\n", b"\r\n")
+    else:
+        report = report.replace(b"# Async", b"#  Async")
+    (output / "report.md").write_bytes(report)
     _rewrite_checksums(output)
 
     with pytest.raises(verifier.EvidenceVerificationError):

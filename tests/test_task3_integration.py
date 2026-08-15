@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import importlib
+import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -211,6 +212,81 @@ def test_malformed_request_uses_compatible_validation_error_envelope(client):
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_failed"
     assert isinstance(response.json()["detail"], list)
+
+
+def test_syntactically_malformed_workflow_yaml_uses_compatible_422_envelope(client):
+    test_client, _ = client
+    response = test_client.post(
+        "/workflows/run",
+        json={"yaml_definition": "name: broken\nsteps: ["},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_failed"
+    assert response.json()["detail"].startswith("Invalid YAML:")
+
+
+def test_api_config_opt_in_runs_independent_steps_concurrently(client, monkeypatch):
+    test_client, _ = client
+    from workflow_engine import main as main_module
+
+    active = 0
+    maximum = 0
+    lock = threading.Lock()
+    rendezvous = threading.Barrier(2)
+
+    def probe(*, context, params):
+        nonlocal active, maximum
+        with lock:
+            active += 1
+            maximum = max(maximum, active)
+        try:
+            rendezvous.wait(timeout=1)
+            return params["step"]
+        finally:
+            with lock:
+                active -= 1
+
+    yaml_definition = """\
+name: configured-parallel
+steps:
+  - id: left
+    task: configured_probe
+    params: {step: left}
+  - id: right
+    task: configured_probe
+    params: {step: right}
+"""
+    monkeypatch.setattr(main_module.config, "WORKFLOW_CONCURRENCY_LIMIT", 2)
+    monkeypatch.setitem(main_module.TASK_REGISTRY, "configured_probe", probe)
+
+    response = test_client.post(
+        "/workflows/run", json={"yaml_definition": yaml_definition}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert maximum == 2
+
+
+def test_async_api_dispatch_carries_configured_concurrency_limit(client, monkeypatch):
+    test_client, _ = client
+    from workflow_engine import main as main_module
+    from workflow_engine import worker as worker_module
+
+    delayed = MagicMock()
+    delayed.id = "task-1"
+    delay = MagicMock(return_value=delayed)
+    monkeypatch.setattr(main_module.config, "WORKFLOW_CONCURRENCY_LIMIT", 3)
+    monkeypatch.setattr(worker_module.run_workflow_task, "delay", delay)
+
+    response = test_client.post(
+        "/workflows/run",
+        json={"yaml_definition": LINEAR, "async_dispatch": True},
+    )
+
+    assert response.status_code == 200
+    assert delay.call_args.args[3] == 3
 
 
 class _FailingStorage:

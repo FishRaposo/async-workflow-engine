@@ -388,8 +388,8 @@ def generate_evidence(output_dir: str | Path) -> dict[str, Any]:
     }
     (directory / "evidence.json").write_bytes(_canonical(evidence) + b"\n")
     (directory / "manifest.json").write_bytes(_canonical(manifest) + b"\n")
-    (directory / "report.md").write_text(
-        _markdown(evidence, reproducibility_hash), encoding="utf-8"
+    (directory / "report.md").write_bytes(
+        _markdown(evidence, reproducibility_hash).encode("utf-8")
     )
     checksums = "\n".join(
         f"{_sha256(directory / filename)}  {filename}"

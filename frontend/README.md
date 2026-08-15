@@ -88,3 +88,10 @@ A `web` service is wired into the repo-root `docker-compose.yml`:
 ```bash
 docker compose up web
 ```
+
+The runtime image installs with `npm ci --omit=dev`, so test and lint tooling is
+not copied into production. Dependency audit status is still not clean: on
+2026-08-15 the full audit reported 16 findings and `npm audit --omit=dev` reported
+3 high findings in the locked Next.js 14/PostCSS/nanoid runtime tree. A hosted
+deployment and the framework-major upgrade needed to clear them are outside this
+offline portfolio finalization; no zero-vulnerability claim is made.
