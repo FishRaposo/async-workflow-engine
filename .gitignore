@@ -26,3 +26,7 @@ venv/
 dist/
 build/
 *.egg-info/
+
+# Reproducible portfolio evidence is generated locally; the normalized golden
+# fixture under tests/ is the committed contract.
+artifacts/portfolio/async-workflow-engine-evidence/
