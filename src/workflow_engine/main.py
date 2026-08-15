@@ -3,9 +3,12 @@
 import os
 import uuid
 from contextlib import asynccontextmanager
+from functools import wraps
+from inspect import iscoroutinefunction
 from typing import Any, NoReturn, Optional
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
@@ -16,14 +19,18 @@ from workflow_engine.internal.vendor_core.errors import (
 )
 from workflow_engine.internal.vendor_core.health import check_health
 from workflow_engine.internal.vendor_core.logging import setup_logging
-from workflow_engine.internal.vendor_core.redis import RedisManager
+
+try:
+    from workflow_engine.internal.vendor_core.redis import RedisManager
+except ImportError:  # pragma: no cover - Redis remains an optional runtime aid
+    RedisManager = None  # type: ignore[assignment]
 
 from . import db as db_module
 from .auth import AuthPolicy, LocalRateLimiter, Role
 from .config import AppConfig
 from .dag import build_dag
 from .db import get_db_manager, get_storage, probe_database
-from .locks import InMemoryLockProvider
+from .locks import InMemoryLockProvider, RedisLockProvider
 from .parser import WorkflowValidationError, load_workflow_yaml
 from .runner import run_workflow
 from .runtime import get_runtime_services
@@ -36,7 +43,7 @@ config = AppConfig()
 setup_logging(level=config.LOG_LEVEL, service_name=config.APP_NAME)
 
 db_manager = get_db_manager(config)
-redis_manager = RedisManager(config.REDIS_URL)
+redis_manager = RedisManager(config.REDIS_URL) if RedisManager else None
 services = get_runtime_services()
 scheduler = services.scheduler
 webhooks = services.webhooks
@@ -92,6 +99,23 @@ async def compatible_http_error(_: Request, exc: HTTPException) -> JSONResponse:
     )
 
 
+@app.exception_handler(RequestValidationError)
+async def compatible_validation_error(
+    _: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Add the stable error envelope without changing FastAPI's detail payload."""
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": exc.errors(),
+            "error": {
+                "code": "validation_failed",
+                "message": "Request validation failed",
+            },
+        },
+    )
+
+
 def _storage() -> Any:
     return get_storage(config)
 
@@ -106,6 +130,30 @@ def _raise(status_code: int, detail: str, code: str) -> NoReturn:
         detail=detail,
         headers={"X-Workflow-Error-Code": code},
     )
+
+
+def _persistence_errors(handler: Any) -> Any:
+    """Translate every storage read/write failure to the public error contract."""
+
+    if iscoroutinefunction(handler):
+
+        @wraps(handler)
+        async def async_wrapped(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return await handler(*args, **kwargs)
+            except SQLAlchemyError as exc:
+                _raise(503, f"Persistence failed: {exc}", "persistence_failed")
+
+        return async_wrapped
+
+    @wraps(handler)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return handler(*args, **kwargs)
+        except SQLAlchemyError as exc:
+            _raise(503, f"Persistence failed: {exc}", "persistence_failed")
+
+    return wrapped
 
 
 def _check_access(request: Request, minimum_role: Role) -> None:
@@ -134,6 +182,13 @@ def _celery_enabled() -> bool:
 
 def _should_dispatch_async(force_async: bool) -> bool:
     return force_async or _celery_enabled()
+
+
+def _lock_provider() -> InMemoryLockProvider | RedisLockProvider:
+    """Use Redis locks only when explicitly configured and importable."""
+    if config.WORKFLOW_REDIS_LOCKING_ENABLED and redis_manager is not None:
+        return RedisLockProvider.from_manager(redis_manager)
+    return run_locks
 
 
 class WorkflowPayload(BaseModel):
@@ -198,7 +253,7 @@ def _dispatch(
         )
 
     if config.WORKFLOW_LOCKING_ENABLED:
-        with run_locks.acquire(
+        with _lock_provider().acquire(
             f"workflow:{canonical_yaml_hash(yaml_definition)}"
         ) as held:
             if not held:
@@ -243,6 +298,7 @@ def run_workflow_endpoint(payload: WorkflowPayload, request: Request):
 
 
 @app.post("/workflows/{run_id}/rerun")
+@_persistence_errors
 def rerun_workflow(
     run_id: str, request: Request, payload: Optional[RerunPayload] = None
 ):
@@ -267,6 +323,7 @@ def rerun_workflow(
 
 
 @app.get("/workflows")
+@_persistence_errors
 def list_workflows(request: Request):
     _check_access(request, Role.VIEWER)
     return {"runs": _storage().list_runs()}
@@ -274,12 +331,14 @@ def list_workflows(request: Request):
 
 # Keep this static route before ``/workflows/{run_id}``.
 @app.get("/workflows/dead-letters")
+@_persistence_errors
 def list_dead_letters(request: Request, run_id: Optional[str] = None):
     _check_access(request, Role.VIEWER)
     return {"dead_letters": _storage().get_dead_letters(run_id)}
 
 
 @app.get("/workflows/{run_id}")
+@_persistence_errors
 def get_workflow_run(run_id: str, request: Request):
     _check_access(request, Role.VIEWER)
     record = _storage().get_run(run_id)
@@ -289,6 +348,7 @@ def get_workflow_run(run_id: str, request: Request):
 
 
 @app.get("/workflows/{run_id}/dag")
+@_persistence_errors
 def get_workflow_dag(run_id: str, request: Request):
     _check_access(request, Role.VIEWER)
     record = _storage().get_run(run_id)
@@ -316,12 +376,14 @@ def register_webhook(name: str, payload: WebhookRegisterPayload, request: Reques
 
 
 @app.get("/webhooks")
+@_persistence_errors
 def list_webhooks(request: Request):
     _check_access(request, Role.VIEWER)
     return {"webhooks": webhooks.list_triggers()}
 
 
 @app.post("/webhooks/{name}")
+@_persistence_errors
 async def trigger_webhook(name: str, request: Request):
     _check_access(request, Role.OPERATOR)
     trigger = webhooks.get(name)
@@ -360,12 +422,14 @@ def create_schedule(payload: SchedulePayload, request: Request):
 
 
 @app.get("/schedules")
+@_persistence_errors
 def list_schedules(request: Request):
     _check_access(request, Role.VIEWER)
     return {"schedules": scheduler.list_schedules()}
 
 
 @app.delete("/schedules/{name}")
+@_persistence_errors
 def delete_schedule(name: str, request: Request):
     _check_access(request, Role.ADMIN)
     if not scheduler.unregister(name):
@@ -374,6 +438,7 @@ def delete_schedule(name: str, request: Request):
 
 
 @app.post("/schedules/run-due")
+@_persistence_errors
 def run_due_schedules(request: Request):
     _check_access(request, Role.OPERATOR)
     return {

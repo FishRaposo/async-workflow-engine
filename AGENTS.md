@@ -18,7 +18,7 @@ Run from within `async-workflow-engine/` (use the venv's python):
 ```bash
 make install          # python -m pip install -e ".[dev]"
 make dev              # uvicorn (src/workflow_engine/main.py:main)
-make test             # pytest (143 tests, no network/DB/broker needed)
+make test             # pytest (161 tests, no network/DB/broker needed)
 make lint             # ruff check src/workflow_engine tests examples alembic
 make format           # ruff format ...
 make typecheck        # pyright src/
@@ -89,8 +89,9 @@ idempotency records, and execution events.
 ## Key Behaviors / Gotchas
 
 - **Storage selection**: `db.db_available` is a module-level cache set by
-  `probe_database()`. `get_storage()` reads it. `main._storage()` resolves per
-  request. The probe uses a 2s connect timeout so it fails fast offline.
+  `probe_database()`. `get_storage()` reads it and keeps one process-local
+  in-memory fallback, so `main._storage()` can resolve per request without
+  losing offline runs. The probe uses a 2s connect timeout so it fails fast.
 - **Route order**: `/workflows/dead-letters` MUST stay declared before
   `/workflows/{run_id}` or it gets captured as a run id.
 - **Async dispatch**: only when `async_dispatch=true` on the request or
@@ -108,7 +109,9 @@ idempotency records, and execution events.
   version hashes and ordered traces; reruns use the recorded version when present.
   Schedule/webhook registries are shared in memory offline and use SQLAlchemy
   adapters after the database probe. HMAC secrets, idempotency headers, API-key
-  roles, rate limits, and execution locks are disabled unless configured.
+  roles, rate limits, and execution locks are disabled unless configured. Redis
+  locks are opt-in through `WORKFLOW_REDIS_LOCKING_ENABLED`; Redis remains
+  optional and the in-memory lock stays the default.
 
 ## Docker Services (`docker-compose.yml`)
 
@@ -122,7 +125,7 @@ idempotency records, and execution events.
 `tests/` — parser, executor, tasks, scheduler, webhooks, dag, runner (in-memory +
 SQLite via the vendored `MockDatabase`), both storage backends, db probe,
 Celery worker (eager, no broker), every API endpoint (success + error), models,
-and a demo smoke test. 143 tests, all offline.
+an Alembic SQLite upgrade, and a demo smoke test. 161 tests, all offline.
 
 ## When to Update This File
 

@@ -34,6 +34,17 @@ export interface DeadLetter {
   run_id?: string;
 }
 
+/** Additive execution trace metadata returned with a persisted run. */
+export interface ExecutionEvent {
+  sequence: number;
+  kind: string;
+  trigger_id?: string | null;
+  run_id: string;
+  step_id?: string | null;
+  attempt?: number | null;
+  details: Record<string, unknown>;
+}
+
 /** Full run record from GET /workflows/{run_id}. */
 export interface RunDetail {
   run_id: string;
@@ -45,6 +56,8 @@ export interface RunDetail {
   errors: Record<string, string>;
   dead_letters: DeadLetter[];
   task_names?: Record<string, string>;
+  version_hash?: string | null;
+  events?: ExecutionEvent[];
   created_at: string | null;
   completed_at?: string | null;
 }

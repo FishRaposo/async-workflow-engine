@@ -32,10 +32,15 @@ class InMemoryLockProvider:
 
 
 class RedisLockProvider:
-    """Thin adapter for a caller-provided Redis-compatible client."""
+    """Optional adapter over the vendored ``RedisManager`` or a compatible client."""
 
     def __init__(self, client: Any) -> None:
         self.client = client
+
+    @classmethod
+    def from_manager(cls, manager: Any) -> "RedisLockProvider":
+        """Build an opt-in lock provider without creating a Redis connection."""
+        return cls(manager.client)
 
     @contextmanager
     def acquire(self, key: str, *, ttl_seconds: int = 60) -> Iterator[bool]:

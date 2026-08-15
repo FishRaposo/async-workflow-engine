@@ -6,6 +6,7 @@
 import type {
   DagResponse,
   DeadLetter,
+  ExecutionEvent,
   RunDetail,
   RunListItem,
   Schedule,
@@ -136,6 +137,44 @@ export const mockRuns: RunListItem[] = [
 
 const leadDeadLetters: DeadLetter[] = [];
 
+const leadEvents: ExecutionEvent[] = [
+  {
+    sequence: 1,
+    kind: "trigger.received",
+    trigger_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    run_id: "11111111-1111-1111-1111-111111111111",
+    details: {},
+  },
+  {
+    sequence: 2,
+    kind: "run.started",
+    run_id: "11111111-1111-1111-1111-111111111111",
+    details: {},
+  },
+  {
+    sequence: 3,
+    kind: "step.started",
+    run_id: "11111111-1111-1111-1111-111111111111",
+    step_id: "parse_input",
+    attempt: 1,
+    details: {},
+  },
+  {
+    sequence: 4,
+    kind: "step.completed",
+    run_id: "11111111-1111-1111-1111-111111111111",
+    step_id: "parse_input",
+    attempt: 1,
+    details: {},
+  },
+  {
+    sequence: 5,
+    kind: "run.finished",
+    run_id: "11111111-1111-1111-1111-111111111111",
+    details: {},
+  },
+];
+
 const paymentDeadLetters: DeadLetter[] = [
   {
     step_id: "charge_gateway",
@@ -173,6 +212,9 @@ export const mockRunDetails: Record<string, RunDetail> = {
       notify_sales: "send_notification",
       quarantine: "send_notification",
     },
+    version_hash:
+      "d9f2b22b3b80e259bbfdd9d907beac5bb30e3d761e80d6544581269876d1fc9a",
+    events: leadEvents,
     created_at: "2026-06-15T09:42:11.000Z",
     completed_at: "2026-06-15T09:42:12.000Z",
   },

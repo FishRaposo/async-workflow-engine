@@ -5,7 +5,7 @@
 - Wired the Task 2 runtime contracts through the existing FastAPI routes without
   removing routes, response keys, status values, YAML semantics, retry/DLQ/rerun
   behavior, or the static dead-letters route ordering.
-- Added offline-default runtime services and optional SQLAlchemy stores for
+- Added offline-default runtime services, an opt-in Redis lock adapter, and optional SQLAlchemy stores for
   schedules, webhooks (including optional HMAC secret), deterministic workflow
   definitions, idempotency claims, and ordered execution events.
 - Persisted workflow version hashes and traces for normal API/worker runs; reruns
@@ -24,12 +24,12 @@
 runtime services, version/trace metadata, HMAC/idempotency enforcement, durable
 adapters, and the migration. It is now green and covers API golden metadata,
 in-memory/SQLite adapter round trips, due-schedule dispatch, webhook HMAC,
-idempotency, and migration table declarations.
+idempotency, and a real Alembic SQLite migration execution.
 
 ## Verification
 
-- `python -m pytest tests/test_task3_integration.py -q --basetemp ...` — 5 passed
-- `python -m pytest -q --basetemp ...` — 148 passed
+- `python -m pytest tests/test_task3_integration.py -q` — 18 passed
+- `python -m pytest -q` — 161 passed
 - `python -m ruff check src/workflow_engine tests examples alembic` — passed
 - `python -m ruff format --check src/workflow_engine tests alembic` — passed
 - `git diff --check` — passed
@@ -40,5 +40,42 @@ idempotency, and migration table declarations.
 ## Explicitly deferred
 
 Hosted/team tenancy, external notification delivery, mandatory infrastructure,
-hosted scheduling, Redis-specific adapters, and distributed Celery fan-out remain
-out of scope and disabled.
+hosted scheduling, Redis-backed runtime stores, and distributed Celery fan-out
+remain out of scope and disabled.
+
+## Review fixes
+
+- `db.get_storage()` now retains one process-local `InMemoryWorkflowStorage`
+  fallback. An unpatched offline API regression proves POST run, GET run, and
+  rerun share it; tests replace that private singleton explicitly for isolation.
+- FastAPI `RequestValidationError` now preserves its legacy `detail` list while
+  adding `error.code=validation_failed`. A shared wrapper gives all persistence
+  read/list/delete/rerun paths the established `detail` plus
+  `error.code=persistence_failed` 503 envelope, including async webhook reads.
+- `RedisLockProvider.from_manager()` adapts the vendored `RedisManager` lazily;
+  main imports Redis safely, selects it only with
+  `WORKFLOW_REDIS_LOCKING_ENABLED`, and otherwise remains in-memory/offline.
+- The dashboard fixture contract now includes optional version hash and ordered
+  execution events, with an isolated frontend Vitest assertion.
+- `AGENTS.md` now reports the current 161 backend tests and documents the
+  process-stable offline store, opt-in Redis lock, and executed Alembic check.
+
+### TDD and verification evidence
+
+- RED: `python -m pytest tests/test_task3_integration.py -q --basetemp C:\temp\awe-task3-red`
+  collected 18: 13 failed (offline storage, validation envelope, persistence
+  envelopes, and Redis manager adapter), 4 passed, and 1 setup error because the
+  requested base-temp parent did not exist. The command was rerun without that
+  invalid base-temp after implementation.
+- GREEN: `python -m pytest tests/test_task3_integration.py -q` — 18 passed.
+- Full backend: `python -m pytest -q` — 161 passed.
+- Backend quality: `python -m ruff check src/workflow_engine tests examples alembic`
+  — passed; `python -m ruff format --check src/workflow_engine tests alembic`
+  — 57 files already formatted; `git diff --check` — passed.
+- Frontend fixture: after `npm.cmd ci --ignore-scripts`,
+  `npx.cmd --no-install tsc --noEmit` — passed and
+  `npx.cmd --no-install vitest run` — 10 files / 25 tests passed. The existing
+  React `act(...)` and Recharts zero-size test warnings remain unrelated.
+- `python -m pyright src/` still reports 16 known pre-existing errors in
+  executor, scheduler, vendored `vendor_core/llm.py`, and the pre-existing
+  FastAPI exception-handler variance; the earlier new lock-adapter error is gone.

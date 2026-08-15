@@ -24,6 +24,10 @@ Storage = Union[DatabaseWorkflowStorage, InMemoryWorkflowStorage]
 # Module-level cache so the API and worker share one probe result.
 db_available: bool = False
 _db_manager: Optional[DatabaseManager] = None
+# Keep the offline backend stable for the lifetime of this process.  The API
+# resolves storage on each request, so constructing this inline would otherwise
+# lose runs between a POST and a following GET/rerun.
+_offline_storage = InMemoryWorkflowStorage()
 
 
 def get_db_manager(config: Optional[AppConfig] = None) -> DatabaseManager:
@@ -82,4 +86,4 @@ def get_storage(config: Optional[AppConfig] = None) -> Storage:
     if db_available:
         manager = get_db_manager(config)
         return DatabaseWorkflowStorage(manager.get_session)
-    return InMemoryWorkflowStorage()
+    return _offline_storage

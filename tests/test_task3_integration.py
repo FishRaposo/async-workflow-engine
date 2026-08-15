@@ -10,9 +10,14 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from alembic.config import Config
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, inspect
+from sqlalchemy.exc import SQLAlchemyError
 
 import workflow_engine.models as models
+from alembic import command
+from workflow_engine.internal.vendor_core.testing import MockRedisClient
 from workflow_engine.storage import InMemoryWorkflowStorage
 
 LINEAR = "name: api-pinned\nsteps:\n  - id: only\n    task: parse_text\n"
@@ -55,8 +60,26 @@ def client(monkeypatch):
         patch.object(main_module, "probe_database", lambda cfg=None: False),
         patch("workflow_engine.db.probe_database", lambda cfg=None: False),
     ):
-        with TestClient(main_module.app) as test_client:
+        with TestClient(main_module.app, raise_server_exceptions=False) as test_client:
             yield test_client, services
+
+
+@pytest.fixture
+def offline_client(monkeypatch):
+    """Exercise the offline API without replacing its storage selector."""
+    from workflow_engine import db as db_module
+    from workflow_engine import main as main_module
+
+    monkeypatch.setattr(db_module, "db_available", False)
+    monkeypatch.setattr(
+        db_module, "_offline_storage", InMemoryWorkflowStorage(), raising=False
+    )
+    with (
+        patch.object(main_module, "probe_database", lambda cfg=None: False),
+        patch("workflow_engine.db.probe_database", lambda cfg=None: False),
+    ):
+        with TestClient(main_module.app, raise_server_exceptions=False) as test_client:
+            yield test_client
 
 
 def test_run_persists_version_and_trace_and_rerun_uses_pinned_definition(client):
@@ -164,12 +187,106 @@ def test_api_schedule_store_is_shared_with_due_dispatch(client):
     assert due.json()["dispatched"][0]["name"] == "minute"
 
 
-def test_migration_declares_task3_tables():
-    from pathlib import Path
+def test_offline_api_keeps_runs_across_unpatched_storage_requests(offline_client):
+    first = offline_client.post("/workflows/run", json={"yaml_definition": LINEAR})
+    run_id = first.json()["run_id"]
 
-    migration_path = Path("alembic/versions/0002_runtime_persistence.py")
-    assert migration_path.exists(), "Task 3 migration is not implemented"
-    migration = migration_path.read_text()
+    found = offline_client.get(f"/workflows/{run_id}")
+    rerun = offline_client.post(f"/workflows/{run_id}/rerun", json={})
+
+    assert found.status_code == 200
+    assert found.json()["run_id"] == run_id
+    assert rerun.status_code == 200
+    assert rerun.json()["run_id"] == run_id
+
+
+def test_malformed_request_uses_compatible_validation_error_envelope(client):
+    test_client, _ = client
+    response = test_client.post(
+        "/workflows/run",
+        content=b'{"yaml_definition":',
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_failed"
+    assert isinstance(response.json()["detail"], list)
+
+
+class _FailingStorage:
+    def __getattr__(self, _: str):
+        raise SQLAlchemyError("database unavailable")
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/workflows"),
+        ("GET", "/workflows/dead-letters"),
+        ("GET", "/workflows/run-1"),
+        ("GET", "/workflows/run-1/dag"),
+        ("POST", "/workflows/run-1/rerun"),
+    ],
+)
+def test_storage_read_paths_return_compatible_persistence_errors(
+    client, monkeypatch, method, path
+):
+    test_client, _ = client
+    from workflow_engine import main as main_module
+
+    monkeypatch.setattr(main_module, "_storage", lambda: _FailingStorage())
+    response = test_client.request(method, path, json={} if method == "POST" else None)
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "persistence_failed"
+    assert response.json()["detail"].startswith("Persistence failed:")
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "target", "method_name"),
+    [
+        ("GET", "/webhooks", "webhooks", "list_triggers"),
+        ("POST", "/webhooks/hook", "webhooks", "get"),
+        ("GET", "/schedules", "scheduler", "list_schedules"),
+        ("DELETE", "/schedules/hourly", "scheduler", "unregister"),
+        ("POST", "/schedules/run-due", "scheduler", "dispatch_due"),
+    ],
+)
+def test_runtime_read_paths_return_compatible_persistence_errors(
+    client, monkeypatch, method, path, target, method_name
+):
+    test_client, _ = client
+    from workflow_engine import main as main_module
+
+    monkeypatch.setattr(
+        getattr(main_module, target),
+        method_name,
+        MagicMock(side_effect=SQLAlchemyError("database unavailable")),
+    )
+    response = test_client.request(method, path, json={} if method == "POST" else None)
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "persistence_failed"
+    assert response.json()["detail"].startswith("Persistence failed:")
+
+
+def test_redis_lock_adapter_uses_vendored_manager_client():
+    from workflow_engine.locks import RedisLockProvider
+
+    manager = SimpleNamespace(client=MockRedisClient())
+    provider = RedisLockProvider.from_manager(manager)
+    with provider.acquire("workflow:one") as acquired:
+        assert acquired is True
+    assert manager.client.get("workflow:one") is None
+
+
+def test_alembic_upgrade_creates_task3_tables(tmp_path, monkeypatch):
+    database_url = f"sqlite:///{tmp_path / 'runtime.db'}"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    alembic_config = Config("alembic.ini")
+    command.upgrade(alembic_config, "head")
+
+    schema = inspect(create_engine(database_url))
     for table in (
         "schedules",
         "webhook_registrations",
@@ -177,4 +294,7 @@ def test_migration_declares_task3_tables():
         "idempotency_records",
         "execution_events",
     ):
-        assert f'"{table}"' in migration
+        assert table in schema.get_table_names()
+    assert "version_hash" in {
+        column["name"] for column in schema.get_columns("workflow_runs")
+    }
