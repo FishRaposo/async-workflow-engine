@@ -44,10 +44,10 @@ docker-down:
 	docker compose down
 
 migrate:
-	alembic upgrade head
+	python -m alembic upgrade head
 
 worker:
-	celery -A workflow_engine.worker.celery_app worker --loglevel=info
+	python -m celery -A workflow_engine.worker.celery_app worker --loglevel=info
 
 demo:
 	python examples/run_demo.py

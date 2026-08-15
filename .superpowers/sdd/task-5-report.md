@@ -136,3 +136,18 @@
 - `npm ci` emits package deprecation notices and 16 transitive advisories (8
   moderate, 7 high, 1 critical). They are recorded rather than silently
   remediated because an audit upgrade would expand this packaging-only change.
+
+## Final review follow-up — Make module entry points
+
+- `migrate` now uses `python -m alembic upgrade head` and `worker` uses
+  `python -m celery -A workflow_engine.worker.celery_app worker --loglevel=info`.
+  Both preserve the prior command arguments while binding execution to the
+  project-selected interpreter.
+- RED/GREEN: the Make tooling contract failed with bare `alembic`/`celery`, then
+  passed after the module-invocation change. `python -m alembic --help` and
+  `python -m celery --help` confirm both entry modules resolve in the canonical
+  environment.
+- GNU Make remains unavailable on this Windows host; no live PostgreSQL/Redis
+  broker was started, so the long-running worker and database-default Alembic
+  upgrade were not launched locally. The command contracts, isolated SQLite
+  migration gate, and offline test suite cover the safe local path.

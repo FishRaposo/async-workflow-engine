@@ -107,6 +107,11 @@ def test_make_targets_use_the_selected_python_interpreter() -> None:
     assert "migration-check:\n\tpython -m scripts.check_sqlite_migrations" in makefile
     assert "evidence-check:\n\tpython -m scripts.portfolio_demo" in makefile
     assert "\tpython -m scripts.verify_portfolio_evidence" in makefile
+    assert "migrate:\n\tpython -m alembic upgrade head" in makefile
+    assert (
+        "worker:\n\tpython -m celery -A workflow_engine.worker.celery_app "
+        "worker --loglevel=info" in makefile
+    )
 
 
 def test_frontend_declares_the_linter_required_by_its_script() -> None:
