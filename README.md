@@ -25,6 +25,7 @@ It is **offline-first**: it runs and tests with no API keys, no database, and no
 - **Cron scheduling** — `WorkflowScheduler` (croniter-backed) registers workflows on a cron expression and computes which are due.
 - **Webhook triggers** — register a workflow under a name and fire it with `POST /webhooks/{name}`; an HMAC signature is enforced when a secret was registered.
 - **Deliberate opt-ins** — local API-key roles, local rate limiting, execution locks, Redis-backed locks, concurrency, and Celery beat are disabled unless configured; the offline default remains synchronous and broker-free.
+- **Definition-level typed I/O** — set root-level `typed_io: true` to pass `TaskInput` into typed task objects and require a `TaskResult` response through sync API, Celery worker, and due-schedule execution. Omitting it preserves the established keyword-callable/dictionary behavior; an invalid typed result follows normal retry and DLQ handling.
 - **Real task implementations** — `parse_text` (via the vendored document chunker), `classify_with_llm` (mock → real LLM via the vendored `LLMClientFactory` → deterministic simulation), and `send_notification`.
 - **Dashboard-ready API** — run/rerun/list/inspect runs, a `{nodes, edges, status}` DAG projection, schedules, webhooks, and the dead-letter queue.
 
@@ -128,7 +129,7 @@ The demo runs five scenarios fully offline and asserts each: (1) a conditional-b
 make test            # pytest
 ```
 
-The verified Python suite has **203 tests**. It covers parser validation, dependency resolution, retries, branching, DLQ, runtime persistence, versioning, idempotency, optional security controls, migrations, the Celery worker in eager mode, and every API endpoint. The dashboard has **25 Vitest tests** and **6 Chromium smoke checks**. These automated checks run without a live PostgreSQL, Redis, Celery worker, or hosted LLM.
+The verified Python suite has **206 tests**. It covers parser validation, dependency resolution, retries, branching, DLQ, runtime persistence, versioning, idempotency, optional security controls, migrations, the Celery worker in eager mode, and every API endpoint. The dashboard has **25 Vitest tests** and **6 Chromium smoke checks**. These automated checks run without a live PostgreSQL, Redis, Celery worker, or hosted LLM.
 
 The finalization evidence is reproducible by `make evidence-check`; the normalized evidence hash is `7a2584c22d4d91fbf9368194d068e94ced6dd149f87aa72e46f88f4dc4581029`. Wheel installation/import, SQLite migrations, and forbidden-dependency scans are separate green CI gates. Docker was not available on the finalization machine; Compose configuration and the frontend container build remain CI gates, not locally verified infrastructure.
 

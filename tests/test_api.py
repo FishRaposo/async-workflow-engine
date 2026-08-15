@@ -102,6 +102,61 @@ def test_run_workflow_success(client):
     assert "run_id" in data
 
 
+def test_run_workflow_honors_typed_io_from_yaml(client, monkeypatch):
+    from workflow_engine import main as main_module
+    from workflow_engine.contracts import TaskInput, TaskResult
+
+    class TypedProbe:
+        def run(self, task_input: TaskInput) -> TaskResult:
+            return TaskResult.ok({"value": task_input.params["value"]})
+
+    monkeypatch.setitem(main_module.TASK_REGISTRY, "typed_probe", TypedProbe())
+    definition = """\
+name: typed
+typed_io: true
+steps:
+  - id: only
+    task: typed_probe
+    retries: 0
+    params: {value: accepted}
+"""
+
+    resp = client[0].post("/workflows/run", json={"yaml_definition": definition})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "completed"
+    assert resp.json()["results"]["only"] == "{'value': 'accepted'}"
+
+
+def test_run_workflow_rejects_non_task_result_from_typed_task(client, monkeypatch):
+    from workflow_engine import main as main_module
+    from workflow_engine.contracts import TaskInput
+
+    class InvalidTypedProbe:
+        def run(self, task_input: TaskInput) -> dict:
+            return {"unexpected": task_input.params}
+
+    monkeypatch.setitem(
+        main_module.TASK_REGISTRY, "invalid_typed_probe", InvalidTypedProbe()
+    )
+    definition = """\
+name: invalid-typed
+typed_io: true
+steps:
+  - id: only
+    task: invalid_typed_probe
+    retries: 0
+"""
+
+    resp = client[0].post("/workflows/run", json={"yaml_definition": definition})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "failed"
+    assert resp.json()["errors"]["only"] == (
+        "Typed task 'invalid_typed_probe' must return TaskResult, got dict"
+    )
+
+
 def test_run_workflow_invalid_yaml_returns_422(client):
     c, _ = client
     resp = c.post("/workflows/run", json={"yaml_definition": "- not a workflow"})

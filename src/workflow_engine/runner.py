@@ -24,7 +24,7 @@ def execute_config(
     *,
     task_registry: Optional[Dict[str, Any]] = None,
     concurrency_limit: Optional[int] = None,
-    typed_io: bool = False,
+    typed_io: Optional[bool] = None,
     trace: Optional[TraceContext] = None,
 ) -> WorkflowExecutor:
     """Execute a parsed config and return the finished executor."""
@@ -32,7 +32,7 @@ def execute_config(
         config,
         task_registry or TASK_REGISTRY,
         concurrency_limit=concurrency_limit,
-        typed_io=typed_io,
+        typed_io=config.typed_io if typed_io is None else typed_io,
         trace=trace,
     )
     executor.execute()
@@ -46,7 +46,7 @@ def run_workflow(
     run_id: Optional[str] = None,
     task_registry: Optional[Dict[str, Any]] = None,
     concurrency_limit: Optional[int] = None,
-    typed_io: bool = False,
+    typed_io: Optional[bool] = None,
     trace: Optional[TraceContext] = None,
     version_store: Optional[WorkflowVersionStore] = None,
     version_hash: Optional[str] = None,

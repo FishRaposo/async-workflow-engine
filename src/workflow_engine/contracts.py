@@ -93,8 +93,13 @@ class TaskRunner:
         task = self.registry[name]
         if isinstance(task, TypedTask):
             result = task.run(task_input)
-        else:
-            result = task(context=task_input.context, params=task_input.params)
+            if not isinstance(result, TaskResult):
+                raise TypeError(
+                    f"Typed task '{name}' must return TaskResult, "
+                    f"got {type(result).__name__}"
+                )
+            return result
+        result = task(context=task_input.context, params=task_input.params)
         return result if isinstance(result, TaskResult) else TaskResult.ok(result)
 
 

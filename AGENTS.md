@@ -18,7 +18,7 @@ Run from within `async-workflow-engine/` (use the venv's python):
 ```bash
 make install          # python -m pip install -e ".[dev]"
 make dev              # uvicorn (src/workflow_engine/main.py:main)
-make test             # pytest (203 tests, no network/DB/broker needed)
+make test             # pytest (206 tests, no network/DB/broker needed)
 make lint             # ruff check src/workflow_engine tests examples alembic
 make format           # ruff format ...
 make typecheck        # pyright src/
@@ -99,6 +99,10 @@ idempotency records, and execution events.
 - **Configured concurrency**: `WORKFLOW_CONCURRENCY_LIMIT` reaches synchronous
   API runs, async Celery dispatch, direct worker execution, and due-schedule
   execution. The default `1` retains legacy YAML-order execution.
+- **Definition-level typed I/O**: root-level `typed_io: true` reaches synchronous
+  API, async worker, and due-schedule execution. Typed task objects receive
+  `TaskInput` and must return `TaskResult`; omitted/false retains legacy
+  keyword-callable/dictionary behavior.
 - **Configured local rate limits**: recognized API keys use key buckets; unknown
   or absent keys use client identity. Bucket mutation is process-local and
   lock-protected; the feature remains off at the default limit `0`.
@@ -107,10 +111,8 @@ idempotency records, and execution events.
 - **Conditional branching**: a condition's source step is an implicit dependency;
   non-matching steps are `SKIPPED` (resolved, so downstream steps don't deadlock).
 - **Task 2 core behavior**: concurrency is opt-in only (`concurrency_limit > 1`);
-  omitted or `1` preserves synchronous YAML-order execution. The contracts,
-  trace, locks, auth/rate-limit primitives, version store, and in-memory
-  schedule/webhook adapters are direct interfaces only. **Task 3 owns FastAPI
-  route wiring and database persistence/migrations for those capabilities.**
+  omitted or `1` preserves synchronous YAML-order execution. Typed I/O is also
+  opt-in only (`typed_io: true`); omitted/false preserves legacy task calls.
 - **Task 3 runtime integration**: normal API/worker runs store deterministic
   version hashes and ordered traces; reruns use the recorded version when present.
   Schedule/webhook registries are shared in memory offline and use SQLAlchemy
@@ -132,7 +134,7 @@ idempotency records, and execution events.
 SQLite via the vendored `MockDatabase`), both storage backends, db probe,
 Celery worker (eager, no broker), every API endpoint (success + error), models,
 an Alembic SQLite upgrade, runtime persistence, opt-in security controls, and a demo
-smoke test. 203 tests, all offline. The dashboard separately has 25 Vitest tests and
+smoke test. 206 tests, all offline. The dashboard separately has 25 Vitest tests and
 6 Chromium smoke checks; Docker local verification is optional and CI-configured.
 
 ## When to Update This File

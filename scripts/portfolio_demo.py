@@ -94,6 +94,7 @@ steps:
 
 TYPED_YAML = """\
 name: evidence-typed
+typed_io: true
 steps:
   - id: typed
     task: typed_probe
@@ -213,7 +214,7 @@ def _execution_evidence() -> tuple[dict[str, Any], dict[str, Any]]:
             )
 
     typed = WorkflowExecutor(
-        load_workflow_yaml(TYPED_YAML), {"typed_probe": TypedProbe()}, typed_io=True
+        load_workflow_yaml(TYPED_YAML), {"typed_probe": TypedProbe()}
     )
     typed.execute()
     observed_backoffs: list[float] = []

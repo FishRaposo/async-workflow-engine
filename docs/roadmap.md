@@ -22,7 +22,7 @@ Milestones for the engine. Items marked ✅ are implemented in this MVP.
 - ✅ **Manual rerun**: `POST /workflows/{run_id}/rerun` re-executes the stored definition under the same id.
 - ✅ **DAG projection API**: `GET /workflows/{run_id}/dag` returns `{nodes, edges, status}` for a dashboard.
 - ✅ **Opt-in bounded parallelism**: independent ready steps run concurrently when `concurrency_limit > 1`; the default remains deterministic YAML-order execution.
-- ✅ **Opt-in typed I/O**: `TaskInput`, `TaskResult`, and `TaskRunner` adapt typed task objects while retaining the established keyword-callable task contract by default.
+- ✅ **Opt-in typed I/O**: a root-level `typed_io: true` definition is honored by API, worker, and due-schedule runs. `TaskRunner` passes `TaskInput` to typed task objects and requires `TaskResult`; omitted/false retains the established keyword-callable task contract.
 
 ---
 

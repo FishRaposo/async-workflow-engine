@@ -59,16 +59,24 @@ def test_task_runner_adapts_typed_and_legacy_tasks():
 
 
 def test_opt_in_typed_io_unwraps_task_result_but_default_keeps_dictionary():
-    config = load_workflow_yaml("name: typed\nsteps:\n  - id: only\n    task: task\n")
+    config = load_workflow_yaml("name: legacy\nsteps:\n  - id: only\n    task: task\n")
+    typed_config = load_workflow_yaml(
+        "name: typed\ntyped_io: true\nsteps:\n  - id: only\n    task: task\n"
+    )
     registry = {"task": lambda *, context, params: TaskResult.ok({"answer": 42})}
 
     legacy = WorkflowExecutor(config, registry)
     legacy.execute()
-    typed = WorkflowExecutor(config, registry, typed_io=True)
+    typed = WorkflowExecutor(typed_config, registry)
     typed.execute()
+    explicit_typed = WorkflowExecutor(config, registry, typed_io=True)
+    explicit_typed.execute()
 
+    assert config.typed_io is False
+    assert typed_config.typed_io is True
     assert isinstance(legacy.results["only"], TaskResult)
     assert typed.results["only"] == {"answer": 42}
+    assert explicit_typed.results["only"] == {"answer": 42}
 
 
 def test_parallel_limit_runs_independent_branches_concurrently_and_keeps_join_ordered():

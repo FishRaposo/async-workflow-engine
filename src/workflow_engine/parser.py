@@ -66,6 +66,7 @@ class WorkflowConfig(BaseModel):
     name: str
     steps: List[StepConfig]
     schedule: Optional[str] = None  # cron expression for scheduled workflows
+    typed_io: bool = False
 
     @field_validator("steps")
     @classmethod

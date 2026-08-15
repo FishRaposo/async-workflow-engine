@@ -40,6 +40,37 @@ def test_run_workflow_task_with_run_id(monkeypatch):
     assert result["run_id"] == "fixed-id"
 
 
+def test_worker_and_due_run_honor_typed_io_from_yaml(monkeypatch):
+    from workflow_engine import runner as runner_module
+    from workflow_engine import worker as worker_module
+    from workflow_engine.contracts import TaskInput, TaskResult
+
+    class TypedProbe:
+        def run(self, task_input: TaskInput) -> TaskResult:
+            return TaskResult.ok({"source": task_input.params["source"]})
+
+    definition = """\
+name: typed-worker
+typed_io: true
+steps:
+  - id: only
+    task: typed_worker_probe
+    retries: 0
+    params: {source: yaml}
+"""
+    monkeypatch.setattr(db_module, "db_available", False)
+    monkeypatch.setattr(worker_module, "probe_database", lambda cfg: False)
+    monkeypatch.setitem(runner_module.TASK_REGISTRY, "typed_worker_probe", TypedProbe())
+
+    worker_result = run_workflow_task.apply(args=[definition]).get()
+    due_result = worker_module._run_due_definition(definition)
+
+    assert worker_result["status"] == "completed"
+    assert worker_result["results"]["only"] == "{'source': 'yaml'}"
+    assert due_result["status"] == "completed"
+    assert due_result["results"]["only"] == "{'source': 'yaml'}"
+
+
 def test_run_due_schedules_callable():
     result = run_due_schedules.apply().get()
     assert result == {"dispatched": []}

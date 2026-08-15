@@ -96,8 +96,10 @@ This historical record's former parallelism and typed-I/O follow-ups were delive
 
 1. **Opt-in bounded parallelism** runs independent ready steps concurrently when
    `concurrency_limit > 1`; the default remains deterministic YAML-order execution.
-2. **Opt-in typed I/O** provides `TaskInput`, `TaskResult`, and `TaskRunner` while
-   preserving the established keyword-callable task contract by default.
+2. **Opt-in typed I/O** is enabled per definition with root-level
+   `typed_io: true`; API, worker, and due-schedule runs then pass `TaskInput` to
+   typed task objects and require `TaskResult`. Omitted/false preserves the
+   established keyword-callable task contract.
 
 The remaining boundaries are operational rather than missing engine behavior:
 

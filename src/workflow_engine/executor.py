@@ -47,7 +47,7 @@ class WorkflowExecutor:
         sleep_fn: Callable[[float], None] = time.sleep,
         max_backoff: float = 8.0,
         concurrency_limit: Optional[int] = None,
-        typed_io: bool = False,
+        typed_io: Optional[bool] = None,
         trace: Optional[TraceContext] = None,
     ):
         self.config = config
@@ -62,7 +62,7 @@ class WorkflowExecutor:
         self._sleep = sleep_fn
         self._max_backoff = max_backoff
         self._concurrency_limit = concurrency_limit
-        self._typed_io = typed_io
+        self._typed_io = config.typed_io if typed_io is None else typed_io
         self.trace = trace
 
     def validate_registry(self) -> None:
