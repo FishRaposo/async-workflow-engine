@@ -33,7 +33,7 @@ flowchart TD
   falling back to in-memory storage.`
 - **Mitigation**: `make docker-up` then restart the API to re-probe. `pool_pre_ping=True`
   (in the vendored `DatabaseManager`) recovers stale connections.
-- **Future**: periodic re-probe so the service upgrades to DB storage without a restart; `restart: unless-stopped` in compose.
+- **Boundary**: the process selects its runtime mode after probing; it does not claim automatic promotion from offline to durable mode without restart.
 
 ## 2. Queue Backlog / Worker Starvation
 
@@ -112,11 +112,11 @@ flowchart TD
   the API returns a `task_id` immediately and execution happens off-thread; poll
   `GET /workflows/{run_id}`.
 
-## 9. Scheduler / Webhook State Loss
+## 9. Offline Runtime State Loss
 
-- **Cause**: Process restart — `WorkflowScheduler` and `WebhookRegistry` are
-  in-memory.
-- **Impact**: Registered schedules and webhook triggers are lost (persisted
-  *runs* are unaffected).
-- **Mitigation**: Re-register on boot from config.
-- **Future**: Persist both registries to PostgreSQL; drive schedules from Celery beat.
+- **Cause**: Process restart while the PostgreSQL probe is unavailable.
+- **Impact**: In offline mode, schedules, webhooks, versions, idempotency claims,
+  and execution events use process-local adapters and are lost. With PostgreSQL
+  available, the runtime selects SQLAlchemy-backed adapters for these records.
+- **Mitigation**: Run durable infrastructure for restart-surviving operations; keep
+  the offline mode for tests and the portfolio demo.

@@ -5,7 +5,7 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![Status: MVP](https://img.shields.io/badge/status-MVP-yellow)
 
-**A declarative workflow orchestration engine that parses YAML DAGs, runs steps in topological order with retries and conditional branching, dispatches runs to Celery workers, and persists every run to PostgreSQL — with a full offline fallback.**
+**DAG-based async workflow orchestrator with Celery, dependency resolution, retry logic, and a YAML workflow DSL.**
 
 ## Why This Exists
 
@@ -20,10 +20,11 @@ It is **offline-first**: it runs and tests with no API keys, no database, and no
 - **DAG execution engine** — `WorkflowExecutor` resolves dependencies in topological order with deadlock detection, retry-with-exponential-backoff, and a per-step persistence hook.
 - **Conditional branching** — a step runs only when a prior step's result satisfies a declared condition (`equals` / `contains` / `not_equals`); otherwise it is `SKIPPED` without deadlocking downstream steps.
 - **Dead-letter queue** — every step that exhausts its retries is quarantined with its error, attempts, and params for inspection and rerun.
-- **PostgreSQL persistence by default, in-memory fallback** — a startup DB probe selects `DatabaseWorkflowStorage`; if no DB is reachable it transparently falls back to `InMemoryWorkflowStorage`, so tests and the demo need no database. Alembic migrations ship for both tables.
+- **Optional durable runtime** — a startup DB probe selects SQLAlchemy-backed runs, schedules, webhooks, version records, idempotency claims, and execution events when PostgreSQL is reachable. Otherwise the same features use process-local in-memory adapters, so tests and the demo need no database.
 - **Real Celery dispatch** — `run_workflow_task` runs a full workflow in the background via the vendored `create_celery_app`, importable with no broker running.
 - **Cron scheduling** — `WorkflowScheduler` (croniter-backed) registers workflows on a cron expression and computes which are due.
-- **Webhook triggers** — register a workflow under a name and fire it with `POST /webhooks/{name}`.
+- **Webhook triggers** — register a workflow under a name and fire it with `POST /webhooks/{name}`; an HMAC signature is enforced when a secret was registered.
+- **Deliberate opt-ins** — local API-key roles, local rate limiting, execution locks, Redis-backed locks, concurrency, and Celery beat are disabled unless configured; the offline default remains synchronous and broker-free.
 - **Real task implementations** — `parse_text` (via the vendored document chunker), `classify_with_llm` (mock → real LLM via the vendored `LLMClientFactory` → deterministic simulation), and `send_notification`.
 - **Dashboard-ready API** — run/rerun/list/inspect runs, a `{nodes, edges, status}` DAG projection, schedules, webhooks, and the dead-letter queue.
 
@@ -73,7 +74,7 @@ See [docs/architecture.md](docs/architecture.md) for sequence and state diagrams
 | **Task Queue** | Celery 5.3+ | Background workflow dispatch with Redis broker |
 | **Scheduling** | croniter 2.0+ | Real cron-expression parsing for scheduled workflows |
 | **Database** | PostgreSQL 16 (pgvector) | Run/step persistence; portfolio-shared image |
-| **Migrations** | Alembic 1.13+ | Versioned schema for `workflow_runs`, `step_executions` |
+| **Migrations** | Alembic 1.13+ | Versioned schema for runs, steps, runtime stores, idempotency, and execution events |
 | **Cache/Broker** | Redis 7 | Celery broker + health check target |
 | **ORM** | SQLAlchemy 2.0+ | Persistence + connection pooling |
 | **Logging** | Loguru 0.7+ | Structured, step-level execution tracing |
@@ -104,7 +105,7 @@ make demo
 | Want | Set |
 |------|-----|
 | Persist runs to PostgreSQL | `DATABASE_URL` reachable + run `alembic upgrade head` |
-| Background dispatch | `make docker-up`, run a Celery worker, send `async_dispatch=true` or set `WORKFLOW_ASYNC=1` |
+| Background dispatch | Start PostgreSQL/Redis, run a Celery worker, then send `async_dispatch=true` or set `WORKFLOW_ASYNC=1` |
 | Real LLM classification | `python -m pip install -e ".[dev,llm]"` + `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` |
 | PDF, DOCX, or HTML document parsing | `python -m pip install -e ".[document-parsers]"` |
 
@@ -127,7 +128,9 @@ The demo runs five scenarios fully offline and asserts each: (1) a conditional-b
 make test            # pytest
 ```
 
-Coverage spans every core module — parser (validation, conditions, cycles), executor (linear/fan-out/diamond DAGs, retries, branching, DLQ, hooks), scheduler, webhooks, DAG projection, runner (end-to-end against in-memory **and** SQLite stores via the vendored `MockDatabase`), both storage backends, the DB probe, the Celery worker (eager, no broker), every API endpoint (success + error paths), and a smoke test that the demo runs. No test needs a network, a real database, or a broker.
+The verified Python suite has **193 tests**. It covers parser validation, dependency resolution, retries, branching, DLQ, runtime persistence, versioning, idempotency, optional security controls, migrations, the Celery worker in eager mode, and every API endpoint. The dashboard has **25 Vitest tests** and **6 Chromium smoke checks**. These automated checks run without a live PostgreSQL, Redis, Celery worker, or hosted LLM.
+
+The finalization evidence is reproducible by `make evidence-check`; the normalized evidence hash is `7a2584c22d4d91fbf9368194d068e94ced6dd149f87aa72e46f88f4dc4581029`. Wheel installation/import, SQLite migrations, and forbidden-dependency scans are separate green CI gates. Docker was not available on the finalization machine; Compose configuration and the frontend container build remain CI gates, not locally verified infrastructure.
 
 ## API Reference
 
@@ -159,21 +162,26 @@ Coverage spans every core module — parser (validation, conditions, cycles), ex
 | `REDIS_URL` | `redis://localhost:6379/0` | Health + Celery broker |
 | `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | `redis://localhost:6379/0` | Background dispatch |
 | `WORKFLOW_ASYNC` | _(unset)_ | `1`/`true` to route runs through Celery by default |
+| `WORKFLOW_AUTH_REQUIRED` | `false` | Require `X-API-Key` values from `WORKFLOW_API_KEYS` (`key:viewer|operator|admin`) |
+| `WORKFLOW_RATE_LIMIT` | `0` | Enable the process-local rate limiter; `0` leaves it disabled |
+| `WORKFLOW_LOCKING_ENABLED` | `false` | Reject duplicate synchronous workflow execution by canonical YAML hash |
+| `WORKFLOW_REDIS_LOCKING_ENABLED` | `false` | Use Redis locks when locking is enabled and Redis is available |
+| `WORKFLOW_CONCURRENCY_LIMIT` | `1` | Opt in to parallel execution of independent ready steps |
+| `WORKFLOW_CELERY_BEAT` | `false` | Enable the Celery-beat schedule hook |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | _(unset)_ | Enable real LLM classification |
 | `LOG_LEVEL` | `INFO` | Loguru verbosity |
 
 ## Known Limitations
 
-1. **Scheduler is tick-driven, not a daemon** — `WorkflowScheduler` computes due runs; firing them requires a Celery-beat loop or a periodic `POST /schedules/run-due`. The state is in-memory.
-2. **Webhook/schedule registries are in-memory** — registered triggers and schedules are lost on restart (runs themselves persist to PostgreSQL).
-3. **No authentication** on API endpoints (development posture).
-4. **Sequential step execution** — independent steps run in dependency order but not in parallel within a single run.
-5. **Async dispatch needs a live broker** — `async_dispatch=true` requires a running Celery worker + Redis; otherwise use the default synchronous path.
+1. **Scheduler is tick-driven by default** — the API can dispatch due schedules, and the Celery-beat hook is opt-in; no live worker/broker deployment was exercised in finalization.
+2. **Offline runtime state is process-local** — schedules, webhooks, versions, idempotency claims, and execution events become durable only after the PostgreSQL probe succeeds.
+3. **Security controls are local, opt-in primitives** — API-key roles, rate limits, locks, and webhook HMAC are implemented but require deliberate configuration and production-grade key/network/observability operations.
+4. **Async dispatch needs a live broker** — `async_dispatch=true` requires a running Celery worker + Redis; otherwise use the default synchronous path.
 
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md). Highlights: parallel fan-out execution, Celery-beat-driven scheduling, persistent schedule/webhook registries, workflow versioning, OpenTelemetry tracing, and a step-I/O contract for typed piping between steps.
+See [docs/roadmap.md](docs/roadmap.md) for deliberately deferred product work. The repository does not claim a live production PostgreSQL/Redis/Celery deployment or a hosted-LLM integration.
 
 ## Related Projects
 
-A **Wave 1** project in the AI Infrastructure Showcase Portfolio. It vendors the proven infrastructure import closure it needs (config, database, redis, logging, errors, health, tasks, llm, docparse), so its installation and offline behavior are independent of sibling repositories.
+The package vendors its required infrastructure import closure under `workflow_engine.internal.vendor_core`; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Packaging is self-contained: the verified wheel has no sibling-repository or Git-URL runtime dependency.

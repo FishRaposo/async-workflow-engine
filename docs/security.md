@@ -42,16 +42,18 @@ trigger surface (webhooks, schedules). This reflects the implemented system.
   (croniter validation) and validates the workflow YAML before registering.
 - **No payload execution**: Webhook request bodies are not interpreted as code or
   merged into the definition; they are available to the workflow as inert data.
-- **Hardening gap (known)**: Webhook endpoints have **no signature verification or
-  authentication** in this MVP. Production deployments must add HMAC signature
-  checks (e.g. an `X-Signature` header) and network restrictions.
+- **Optional HMAC verification**: a registration can carry a secret; when it does,
+  `POST /webhooks/{name}` requires a valid `X-Hub-Signature-256` value before
+  dispatch. A webhook with no registered secret intentionally remains open in the
+  offline default, so deployments must configure a secret and network restrictions.
 
 ---
 
 ## 4. Queue, State, and Persistence Boundaries
 
-- **Broker protection**: Redis is the Celery broker. Local compose exposes 6379;
-  production must restrict ingress to internal networks and enable Redis AUTH/TLS.
+- **Broker protection**: Redis is optional and used for Celery dispatch and opt-in
+  distributed locks. Local compose exposes 6379; production must restrict ingress
+  to internal networks and enable Redis AUTH/TLS.
 - **Run-state persistence**: Runs persist to PostgreSQL (`workflow_runs`,
   `step_executions`) with the original YAML stored to enable rerun. The
   `dead_letters` column and step `result`/`error` may contain task output — if
@@ -61,11 +63,18 @@ trigger surface (webhooks, schedules). This reflects the implemented system.
 
 ---
 
-## 5. Known Gaps (MVP posture)
+## 5. Optional Controls and Production Boundaries
 
-- **No API authentication / authorization** on any endpoint.
-- **In-memory webhook/schedule registries** — not access-controlled, lost on restart.
-- **No rate limiting** on trigger endpoints.
-- **No multi-tenancy / per-workflow RBAC.**
+- **API-key roles** are implemented (`viewer`, `operator`, `admin`) but are open by
+  default. Enabling them requires `WORKFLOW_AUTH_REQUIRED=true` and a securely
+  managed `WORKFLOW_API_KEYS` mapping.
+- **Rate limiting** is implemented only as a process-local limiter and is disabled
+  at `WORKFLOW_RATE_LIMIT=0`; it is not a distributed production limiter.
+- **Runtime persistence** is durable only with reachable PostgreSQL. Offline
+  schedules, webhooks, versions, idempotency claims, and execution events are
+  process-local and are lost on restart.
+- **No multi-tenancy / per-workflow RBAC, secret rotation, TLS termination,
+  distributed rate limiting, or production observability claim** is made here.
 
-These are appropriate for a showcase but must be closed before any production use.
+These boundaries preserve an offline demo while making production hardening an
+explicit deployment responsibility.

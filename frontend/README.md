@@ -25,7 +25,7 @@ By default the UI talks to the backend at `http://localhost:8000`. Start the
 backend separately (from the repo root):
 
 ```bash
-uvicorn workflow_engine.main:app --reload   # or: make run
+python -m workflow_engine.main              # or: make dev
 ```
 
 ## Demo mode (no backend required)
@@ -75,8 +75,11 @@ npm run test:e2e     # playwright smoke spec (drives the demo-mode UI)
 ## Tests
 
 - **Component / unit tests** (`tests/`) render components against the bundled
-  mock data and assert content; they pass with **no backend**.
-- **E2E smoke spec** (`e2e/smoke.spec.ts`) navigates the demo-mode UI end to end.
+  mock data and assert content; the verified suite has **25 Vitest tests** and
+  needs **no backend**.
+- **E2E smoke spec** (`e2e/smoke.spec.ts`) has **6 Chromium smoke checks** through
+  the demo-mode UI. Docker was unavailable during finalization; the frontend image
+  build remains configured as a CI gate.
 
 ## Docker
 

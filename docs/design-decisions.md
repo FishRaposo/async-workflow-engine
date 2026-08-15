@@ -14,7 +14,7 @@ This document records the key architectural choices made during the development 
 
 ## Decision 2: Docker Compose for Local Isolation
 
-- **Context**: The workflow engine depends on PostgreSQL (for future persistence) and Redis (for Celery broker and health checks). Developers need these services running locally.
+- **Context**: PostgreSQL enables durable runtime state and Redis enables Celery dispatch/optional locks, while the default demo and test path must remain offline.
 - **Options**:
   1. Rely on host-installed PostgreSQL and Redis.
   2. Configure `docker-compose.yml` for isolated container setups.

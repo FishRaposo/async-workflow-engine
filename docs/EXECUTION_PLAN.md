@@ -1,4 +1,8 @@
-# Execution Plan — Async Workflow Engine
+# Historical Execution Record — Async Workflow Engine
+
+> This is an implementation-era record, retained for provenance. Current operational
+> behavior and deferred boundaries are documented in the root README and the current
+> architecture, security, and roadmap documents.
 
 This document records what was built to bring the engine from a ~75% scaffold to
 a fully-implemented, tested, documented MVP, and what remains.
@@ -89,8 +93,7 @@ Makefile gains a `migrate` target.
 ## What's Next
 
 1. Parallel execution of independent steps within a run (thread/async pool).
-2. Celery-beat integration so schedules fire without a manual tick.
-3. Persist schedule/webhook registries (survive restart).
+2. Production deployment validation for PostgreSQL, Redis, and Celery.
+3. Multi-tenant security and distributed rate limiting beyond the local opt-in controls.
 4. Typed step-I/O contract for piping structured data between steps.
-5. AuthN/AuthZ on the API and per-workflow RBAC.
-6. OpenTelemetry spans from trigger → run → step (a future local tracing layer).
+5. Production OpenTelemetry export/operations integration.

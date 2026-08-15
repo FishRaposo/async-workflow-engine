@@ -1,4 +1,9 @@
-# Implementation Plan - Async Workflow Engine
+# Historical Implementation Plan - Async Workflow Engine
+
+> Historical scaffold plan retained for provenance. It does not describe the final
+> runtime. Use the root README, [architecture.md](architecture.md),
+> [security.md](security.md), and [roadmap.md](roadmap.md) for current behavior and
+> explicit deferrals.
 
 This document details the step-by-step technical implementation plan and development milestones for **Async Workflow Engine**.
 

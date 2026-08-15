@@ -32,13 +32,10 @@ Milestones for the engine. Items marked ✅ are implemented in this MVP.
 
 ---
 
-## Milestone 4: Production Hardening (Future)
+## Milestone 4: Deliberately Deferred Product Work
 
-- **Parallel fan-out**: execute independent steps within a run concurrently (thread/async pool or per-step Celery dispatch).
-- **Celery-beat scheduling**: fire due schedules automatically instead of a manual tick.
-- **Persistent registries**: store schedules and webhook triggers in PostgreSQL so they survive restarts.
-- **Typed step I/O**: a contract for piping structured (validated) data between steps rather than stringified results.
-- **AuthN/AuthZ**: API authentication, webhook signature verification, per-workflow RBAC, and rate limiting.
-- **OpenTelemetry tracing**: spans from trigger → run → step via a local tracing integration.
-- **Distributed locks**: `RedisManager` locks to prevent concurrent execution of the same scheduled workflow instance.
-- **Workflow versioning**: store and pin definition versions for reproducible reruns.
+- **Production deployment validation**: run against a live PostgreSQL, Redis, and Celery worker deployment with production network, credential, and observability controls.
+- **Multi-tenant security**: secret rotation, TLS termination, per-workflow RBAC, and distributed rate limiting beyond the local opt-in primitives.
+- **Typed step I/O**: a contract for piping structured (validated) data rather than the current task-result convention.
+- **OpenTelemetry export**: production tracing/export configuration beyond the deterministic execution-event store.
+- **Operations UI**: turn the included offline-capable dashboard into a deployed, authenticated operator surface.

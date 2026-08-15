@@ -23,6 +23,9 @@ The engine is intentionally built from first principles—no Airflow, no Prefect
 | `storage_db.py` | PostgreSQL run persistence (default) | `DatabaseWorkflowStorage` |
 | `models.py` | SQLAlchemy ORM models | `WorkflowRun`, `StepExecution` |
 | `worker.py` | Celery app + real background workflow task | `celery_app`, `run_workflow_task()` |
+| `runtime.py` | Selects process-local or SQLAlchemy-backed runtime adapters | `RuntimeServices`, `get_runtime_services()` |
+| `versions.py` | Canonical YAML hashes and pinned definition records | `canonical_yaml_hash()` |
+| `auth.py` / `locks.py` | Disabled-by-default local API-key, rate-limit, and lock primitives | `AuthPolicy`, `LocalRateLimiter`, lock providers |
 | `config.py` | Project-specific configuration | `AppConfig` (extends `BaseAppConfig`) |
 | `errors.py` | Structured error response handler | `application_error_handler()` |
 
@@ -171,12 +174,14 @@ graph LR
     DB --> PG[("PostgreSQL")]
 ```
 
-Schema (created by Alembic migration `0001_initial_schema`):
+Alembic migration `0001_initial_schema` creates run/step records; `0002_runtime_persistence` adds pinned definitions, schedules, webhooks, idempotency records, and execution events:
 
 | Table | Columns | Purpose |
 |-------|---------|---------|
 | `workflow_runs` | `id`, `workflow_name`, `yaml_definition`, `status`, `started_at`, `completed_at`, `dead_letters` (JSON), `created_at`, `updated_at` | Run records; YAML stored to enable rerun |
 | `step_executions` | `id`, `run_id` (FK), `step_id`, `task_name`, `status`, `result`, `error`, `attempt`, `created_at`, `updated_at` | Per-step execution history |
+
+The runtime stores are durable only when the PostgreSQL probe succeeds. Offline mode deliberately uses process-local adapters and is suitable for the demo and tests, not restart-surviving operations.
 
 ## Background Jobs
 
@@ -203,7 +208,7 @@ Celery worker, so the two can never diverge.
 
 | Service | Required | Used By | Failure Behavior |
 |---------|----------|---------|------------------|
-| PostgreSQL 16 | Optional (default persistence) | run persistence, health | Probe fails fast → falls back to in-memory storage; health reports `"database": "offline"` |
+| PostgreSQL 16 | Optional (durable runtime) | runs, schedules, webhooks, versions, idempotency, events, health | Probe fails fast → process-local adapters; health reports `"database": "offline"` |
 | Redis 7 | Optional (async dispatch only) | Celery broker, health | Async dispatch unavailable; default sync path unaffected; health reports `"redis": "offline"` |
 
 Both services are provisioned via `docker-compose.yml` with health checks (`pg_isready`, `redis-cli ping`).
@@ -244,4 +249,4 @@ See [security.md](security.md) for detailed analysis. Key boundaries:
 - **YAML parsing** uses `yaml.safe_load()` (not `yaml.load()`) to prevent arbitrary code execution
 - **Task dispatch** is limited to functions registered in `TASK_REGISTRY` — user-submitted YAML cannot execute arbitrary code
 - **Database credentials** are environment variables, not hardcoded
-- **No authentication** on API endpoints (development mode)
+- **Optional local controls**: API-key roles, rate limiting, execution locks, and webhook HMAC remain disabled until configured; see [security.md](security.md).
