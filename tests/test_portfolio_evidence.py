@@ -27,6 +27,16 @@ def _evidence_modules():
     return demo, verifier
 
 
+def _rewrite_checksums(output: Path) -> None:
+    (output / "checksums.sha256").write_text(
+        "\n".join(
+            f"{hashlib.sha256((output / name).read_bytes()).hexdigest()}  {name}"
+            for name in ("evidence.json", "manifest.json", "report.md")
+        )
+        + "\n"
+    )
+
+
 def test_generator_is_reproducible_and_exercises_real_offline_capabilities(tmp_path):
     demo, verifier = _evidence_modules()
     first = demo.generate_evidence(tmp_path / "first")
@@ -149,20 +159,49 @@ def test_verifier_rejects_a_self_consistent_tampered_manifest(tmp_path):
         verifier.verify_evidence(output)
 
 
+@pytest.mark.parametrize("filename", ["evidence.json", "manifest.json"])
+def test_verifier_rejects_self_consistent_pretty_reordered_json(tmp_path, filename):
+    demo, verifier = _evidence_modules()
+    output = tmp_path / filename
+    demo.generate_evidence(output)
+    value = json.loads((output / filename).read_text())
+    reordered = dict(reversed(tuple(value.items())))
+    (output / filename).write_text(
+        json.dumps(reordered, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    _rewrite_checksums(output)
+
+    with pytest.raises(verifier.EvidenceVerificationError):
+        verifier.verify_evidence(output)
+
+
+@pytest.mark.parametrize("filename", ["evidence.json", "manifest.json"])
+def test_verifier_rejects_json_without_the_canonical_trailing_newline(
+    tmp_path, filename
+):
+    demo, verifier = _evidence_modules()
+    output = tmp_path / f"no-newline-{filename}"
+    demo.generate_evidence(output)
+    (output / filename).write_bytes((output / filename).read_bytes().rstrip(b"\n"))
+    _rewrite_checksums(output)
+
+    with pytest.raises(verifier.EvidenceVerificationError):
+        verifier.verify_evidence(output)
+
+
 def test_verifier_rejects_a_self_consistent_tampered_report(tmp_path):
     demo, verifier = _evidence_modules()
     output = tmp_path / "report-tamper"
-    demo.generate_evidence(output)
+    manifest = demo.generate_evidence(output)
+    report = (output / "report.md").read_text(encoding="utf-8")
     (output / "report.md").write_text(
-        "# altered\n\nReproducibility hash: `" + "0" * 64 + "`\n"
+        report.replace("fixtures are recorded.", "fixtures are archived."),
+        encoding="utf-8",
     )
-    (output / "checksums.sha256").write_text(
-        "\n".join(
-            f"{hashlib.sha256((output / name).read_bytes()).hexdigest()}  {name}"
-            for name in ("evidence.json", "manifest.json", "report.md")
-        )
-        + "\n"
+    assert manifest["reproducibility_hash"] in (output / "report.md").read_text(
+        encoding="utf-8"
     )
+    _rewrite_checksums(output)
 
     with pytest.raises(verifier.EvidenceVerificationError):
         verifier.verify_evidence(output)

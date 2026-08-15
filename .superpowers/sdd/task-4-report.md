@@ -81,3 +81,28 @@
   each initially passed verification. The typed-I/O evidence assertion was also
   red until the real typed task was added. The final focused evidence suite is
   11 passed.
+
+## Canonical-byte review fix
+
+- Root cause: the verifier compared parsed JSON semantics. A pretty-printed or
+  reordered `evidence.json` or `manifest.json` with correct values and freshly
+  recomputed checksums therefore passed.
+- RED: new self-consistent formatting-only regressions for each JSON artifact,
+  plus missing-final-newline regressions, failed as intended under the prior
+  verifier: 4 failures / 11 passes (`pytest` collected 15 tests).
+- Fix: after checksum validation and JSON parsing, the verifier requires exact
+  UTF-8 bytes for `evidence.json` (`canonical golden JSON + LF`) and
+  `manifest.json` (`canonical normalized manifest + LF`). `report.md` remains
+  an exact expected-text comparison.
+- The report-tamper regression now changes only the innocuous phrase
+  `fixtures are recorded.` to `fixtures are archived.`, retains the valid
+  reproducibility hash, and recomputes checksums before asserting rejection.
+- GREEN: `python -m pytest tests/test_portfolio_evidence.py -q` — 15 passed.
+- Full regression: `python -m pytest -q` — 178 passed.
+- Style: `python -m ruff check scripts/verify_portfolio_evidence.py
+  tests/test_portfolio_evidence.py` and `python -m ruff format --check
+  scripts/verify_portfolio_evidence.py tests/test_portfolio_evidence.py` — passed.
+- Reproducibility: two runs of `python scripts/portfolio_demo.py`, each followed
+  by `python scripts/verify_portfolio_evidence.py
+  artifacts/portfolio/async-workflow-engine-evidence`, passed with identical
+  hash `7a2584c22d4d91fbf9368194d068e94ced6dd149f87aa72e46f88f4dc4581029`.

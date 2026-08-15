@@ -18,6 +18,12 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _canonical_json(value: dict[str, Any]) -> bytes:
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -79,7 +85,7 @@ def verify_evidence(output_dir: str | Path) -> dict[str, Any]:
         raise EvidenceVerificationError("Evidence files are missing or unexpected")
 
     manifest = _read_json(directory / "manifest.json")
-    evidence = _read_json(directory / "evidence.json")
+    _read_json(directory / "evidence.json")
     golden = _read_json(
         Path(__file__).resolve().parents[1]
         / "tests"
@@ -92,14 +98,10 @@ def verify_evidence(output_dir: str | Path) -> dict[str, Any]:
         if _sha256(directory / filename) != expected:
             raise EvidenceVerificationError(f"Checksum mismatch: {filename}")
 
-    canonical_evidence = json.dumps(
-        evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    if canonical_evidence != json.dumps(
-        golden, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8"):
+    canonical_evidence = _canonical_json(golden)
+    if (directory / "evidence.json").read_bytes() != canonical_evidence + b"\n":
         raise EvidenceVerificationError(
-            "Evidence does not match the normalized golden fixture"
+            "Evidence JSON is not the canonical normalized golden fixture"
         )
     reproducibility_hash = hashlib.sha256(canonical_evidence).hexdigest()
     expected_manifest = {
@@ -107,8 +109,10 @@ def verify_evidence(output_dir: str | Path) -> dict[str, Any]:
         "reproducibility_hash": reproducibility_hash,
         "schema_version": 1,
     }
-    if manifest != expected_manifest:
-        raise EvidenceVerificationError("Manifest does not match normalized evidence")
+    if (directory / "manifest.json").read_bytes() != _canonical_json(
+        expected_manifest
+    ) + b"\n":
+        raise EvidenceVerificationError("Manifest JSON is not canonical")
     report = (directory / "report.md").read_text(encoding="utf-8")
     if report != _expected_report(golden, reproducibility_hash):
         raise EvidenceVerificationError(
