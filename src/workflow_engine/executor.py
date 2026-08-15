@@ -16,11 +16,14 @@ each step's registered task. It supports:
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger
 
+from .contracts import TaskInput, TaskRunner
 from .parser import StepConfig, WorkflowConfig
+from .trace import TraceContext
 
 # Step status constants
 PENDING = "PENDING"
@@ -43,6 +46,9 @@ class WorkflowExecutor:
         on_step: Optional[StepHook] = None,
         sleep_fn: Callable[[float], None] = time.sleep,
         max_backoff: float = 8.0,
+        concurrency_limit: Optional[int] = None,
+        typed_io: bool = False,
+        trace: Optional[TraceContext] = None,
     ):
         self.config = config
         self.task_registry = task_registry
@@ -54,6 +60,9 @@ class WorkflowExecutor:
         self.on_step = on_step
         self._sleep = sleep_fn
         self._max_backoff = max_backoff
+        self._concurrency_limit = concurrency_limit
+        self._typed_io = typed_io
+        self.trace = trace
 
     def validate_registry(self) -> None:
         missing = [
@@ -71,48 +80,97 @@ class WorkflowExecutor:
         self.validate_registry()
         resolved: set[str] = set()
         total = len(self.config.steps)
+        self._trace("run.started")
 
         while len(resolved) < total:
-            executed_this_round = False
-            for step in self.config.steps:
-                if self.statuses[step.id] != PENDING:
-                    continue
+            runnable, executed_this_round = self._collect_runnable(resolved)
 
-                deps_met = all(dep in resolved for dep in (step.depends_on or []))
-                if not deps_met:
-                    continue
-
-                # Conditional branching: the condition's source step must already
-                # be resolved (guaranteed by detect_cycles' implicit dependency).
-                if step.condition is not None:
-                    cond_src = step.condition.step
-                    if cond_src not in resolved:
-                        continue
-                    if not step.condition.evaluate(self.results):
-                        self.statuses[step.id] = SKIPPED
-                        resolved.add(step.id)
-                        executed_this_round = True
-                        logger.info(f"Step {step.id} SKIPPED (condition not met)")
-                        self._emit(step)
-                        continue
-
-                self._run_step(step)
-                resolved.add(step.id)
+            if runnable:
+                if self._concurrency_limit is not None and self._concurrency_limit > 1:
+                    self._run_parallel(runnable)
+                else:
+                    for step in runnable:
+                        self._run_step(step)
+                for step in runnable:
+                    resolved.add(step.id)
                 executed_this_round = True
 
             if not executed_this_round and len(resolved) < total:
                 logger.error("Deadlock detected or dependency loop in DAG execution.")
                 break
 
+        self._trace("run.finished", status=self.overall_status)
         return self.statuses
+
+    def _collect_runnable(self, resolved: set[str]) -> tuple[List[StepConfig], bool]:
+        """Resolve false branches and collect one ready DAG layer."""
+        runnable: List[StepConfig] = []
+        skipped = False
+        for step in self.config.steps:
+            if self.statuses[step.id] != PENDING:
+                continue
+            if not all(dep in resolved for dep in (step.depends_on or [])):
+                continue
+            if step.condition is not None and step.condition.step not in resolved:
+                continue
+            if step.condition is not None and not step.condition.evaluate(self.results):
+                self.statuses[step.id] = SKIPPED
+                resolved.add(step.id)
+                skipped = True
+                logger.info(f"Step {step.id} SKIPPED (condition not met)")
+                self._trace("step.skipped", step)
+                self._emit(step)
+                continue
+            runnable.append(step)
+        return runnable, skipped
 
     def _run_step(self, step: StepConfig) -> None:
         logger.info(f"Running step {step.id} (task: {step.task})...")
         self.statuses[step.id] = RUNNING
+        self._trace("step.started", step)
         task_fn = self.task_registry.get(step.task)
         context = dict(self.results)
-        self._run_with_retry(step, task_fn, context)
+        succeeded = self._run_with_retry(step, task_fn, context)
+        self._trace(
+            "step.completed" if succeeded else "step.failed",
+            step,
+            attempt=self.retry_counts[step.id] or None,
+        )
+        if not succeeded:
+            self._trace("dlq.recorded", step, attempt=self.retry_counts[step.id])
         self._emit(step)
+
+    def _run_parallel(self, steps: List[StepConfig]) -> None:
+        """Run one ready DAG layer concurrently, then publish in config order."""
+        limit = min(self._concurrency_limit or 1, len(steps))
+        for step in steps:
+            self.statuses[step.id] = RUNNING
+            self._trace("step.started", step)
+        with ThreadPoolExecutor(max_workers=limit) as pool:
+            futures = {
+                step.id: pool.submit(
+                    self._run_with_retry,
+                    step,
+                    self.task_registry.get(step.task),
+                    dict(self.results),
+                    False,
+                )
+                for step in steps
+            }
+            outcomes = {step.id: futures[step.id].result() for step in steps}
+        for step in steps:
+            retry_events = min(self.retry_counts[step.id], step.retries)
+            for attempt in range(1, retry_events + 1):
+                self._trace("step.retry", step, attempt=attempt)
+            succeeded = outcomes[step.id]
+            self._trace(
+                "step.completed" if succeeded else "step.failed",
+                step,
+                attempt=self.retry_counts[step.id] or None,
+            )
+            if not succeeded:
+                self._trace("dlq.recorded", step, attempt=self.retry_counts[step.id])
+            self._emit(step)
 
     def _emit(self, step: StepConfig) -> None:
         if self.on_step is None:
@@ -129,13 +187,27 @@ class WorkflowExecutor:
             logger.warning(f"on_step hook failed for {step.id}: {exc}")
 
     def _run_with_retry(
-        self, step: StepConfig, task_fn: Callable, context: Dict[str, Any]
+        self,
+        step: StepConfig,
+        task_fn: Callable,
+        context: Dict[str, Any],
+        emit_trace: bool = True,
     ) -> bool:
         max_retries = step.retries
         last_error = ""
         for attempt in range(max_retries + 1):
             try:
-                res = task_fn(context=context, params=step.params)
+                if self._typed_io:
+                    res = (
+                        TaskRunner(self.task_registry)
+                        .run(
+                            step.task,
+                            TaskInput(context=context, params=dict(step.params)),
+                        )
+                        .unwrap()
+                    )
+                else:
+                    res = task_fn(context=context, params=step.params)
                 self.results[step.id] = res
                 self.statuses[step.id] = COMPLETED
                 if attempt > 0:
@@ -145,6 +217,8 @@ class WorkflowExecutor:
                 last_error = str(exc)
                 self.retry_counts[step.id] = attempt + 1
                 if attempt < max_retries:
+                    if emit_trace:
+                        self._trace("step.retry", step, attempt=attempt + 1)
                     backoff = min(0.5 * (2**attempt), self._max_backoff)
                     logger.warning(
                         f"Step {step.id} failed "
@@ -168,6 +242,22 @@ class WorkflowExecutor:
             }
         )
         return False
+
+    def _trace(
+        self,
+        kind: str,
+        step: Optional[StepConfig] = None,
+        *,
+        attempt: Optional[int] = None,
+        **details: Any,
+    ) -> None:
+        if self.trace is not None:
+            self.trace.emit(
+                kind,
+                step_id=step.id if step else None,
+                attempt=attempt,
+                **details,
+            )
 
     @property
     def overall_status(self) -> str:
