@@ -96,6 +96,43 @@ def test_parallel_limit_runs_independent_branches_concurrently_and_keeps_join_or
     assert finished[-1] == "join"
 
 
+def test_default_execution_preserves_legacy_yaml_order_after_dependency_resolution():
+    config = load_workflow_yaml(
+        """\
+name: legacy-order
+steps:
+  - id: A
+    task: record
+    params: {step_id: A}
+  - id: C
+    task: record
+    depends_on: [A]
+    params: {step_id: C}
+  - id: B
+    task: record
+    params: {step_id: B}
+"""
+    )
+
+    def execute_with(concurrency_limit):
+        execution_order: list[str] = []
+
+        def record(*, context, params):
+            step_id = params["step_id"]
+            execution_order.append(step_id)
+            return step_id
+
+        WorkflowExecutor(
+            config,
+            {"record": record},
+            concurrency_limit=concurrency_limit,
+        ).execute()
+        return execution_order
+
+    assert execute_with(None) == ["A", "C", "B"]
+    assert execute_with(1) == ["A", "C", "B"]
+
+
 def test_trace_records_deterministic_step_retry_and_dlq_events():
     config = load_workflow_yaml(
         "name: trace\nsteps:\n  - id: bad\n    task: fail\n    retries: 1\n"
@@ -116,6 +153,36 @@ def test_trace_records_deterministic_step_retry_and_dlq_events():
         ("step.failed", "bad", 2),
         ("dlq.recorded", "bad", 2),
         ("run.finished", None, None),
+    ]
+
+
+def test_retry_trace_attempt_is_the_actual_execution_attempt():
+    config = load_workflow_yaml(
+        "name: retry-success\nsteps:\n  - id: flaky\n    task: flaky\n    retries: 1\n"
+    )
+    attempts = 0
+
+    def flaky(*, context, params):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("try again")
+        return "ok"
+
+    trace = TraceContext()
+    WorkflowExecutor(
+        config,
+        {"flaky": flaky},
+        trace=trace,
+        sleep_fn=lambda _: None,
+    ).execute()
+
+    assert [(event.kind, event.attempt) for event in trace.events] == [
+        ("run.started", None),
+        ("step.started", None),
+        ("step.retry", 1),
+        ("step.completed", 2),
+        ("run.finished", None),
     ]
 
 

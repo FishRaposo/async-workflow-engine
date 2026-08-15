@@ -18,7 +18,7 @@ Run from within `async-workflow-engine/` (use the venv's python):
 ```bash
 make install          # python -m pip install -e ".[dev]"
 make dev              # uvicorn (src/workflow_engine/main.py:main)
-make test             # pytest (125 tests, no network/DB/broker needed)
+make test             # pytest (143 tests, no network/DB/broker needed)
 make lint             # ruff check src/workflow_engine tests examples alembic
 make format           # ruff format ...
 make typecheck        # pyright src/
@@ -61,6 +61,11 @@ startup (`probe_database`) to select the storage backend. Routes:
 | `main.py` | FastAPI app, all routes, dispatch (sync/Celery), storage selection |
 | `runner.py` | `run_workflow()` — parse → execute → persist; shared by API + worker |
 | `executor.py` | `WorkflowExecutor` — DAG traversal, retries, branching, DLQ, `on_step` hook |
+| `contracts.py` | Workflow-owned storage/task/idempotency compatibility contracts with in-memory defaults |
+| `trace.py` | `TraceContext` and deterministic in-process execution events |
+| `locks.py` | In-memory lock provider and caller-supplied Redis lock adapter |
+| `auth.py` | Disabled-by-default local API-key role policy and rate-limiter primitives |
+| `versions.py` | Deterministic YAML content hashes and in-memory workflow version store |
 | `parser.py` | `WorkflowConfig`/`StepConfig`/`StepCondition`, `load_workflow_yaml`, cycle detection |
 | `tasks.py` | `TASK_REGISTRY`: `parse_text` (docparse), `classify_with_llm` (sim/real LLM), `send_notification`, `always_fail` |
 | `scheduler.py` | `WorkflowScheduler` (croniter): register/due/mark_ran |
@@ -90,6 +95,11 @@ startup (`probe_database`) to select the storage backend. Routes:
   deterministic simulation. Offline by default.
 - **Conditional branching**: a condition's source step is an implicit dependency;
   non-matching steps are `SKIPPED` (resolved, so downstream steps don't deadlock).
+- **Task 2 core behavior**: concurrency is opt-in only (`concurrency_limit > 1`);
+  omitted or `1` preserves synchronous YAML-order execution. The contracts,
+  trace, locks, auth/rate-limit primitives, version store, and in-memory
+  schedule/webhook adapters are direct interfaces only. **Task 3 owns FastAPI
+  route wiring and database persistence/migrations for those capabilities.**
 
 ## Docker Services (`docker-compose.yml`)
 
@@ -103,7 +113,7 @@ startup (`probe_database`) to select the storage backend. Routes:
 `tests/` — parser, executor, tasks, scheduler, webhooks, dag, runner (in-memory +
 SQLite via the vendored `MockDatabase`), both storage backends, db probe,
 Celery worker (eager, no broker), every API endpoint (success + error), models,
-and a demo smoke test. 125 tests, all offline.
+and a demo smoke test. 143 tests, all offline.
 
 ## When to Update This File
 

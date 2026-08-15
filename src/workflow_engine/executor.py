@@ -55,6 +55,7 @@ class WorkflowExecutor:
         self.statuses: Dict[str, str] = {step.id: PENDING for step in config.steps}
         self.results: Dict[str, Any] = {}
         self.retry_counts: Dict[str, int] = {step.id: 0 for step in config.steps}
+        self._attempt_counts: Dict[str, int] = {step.id: 0 for step in config.steps}
         self.errors: Dict[str, str] = {}
         self.dead_letters: List[Dict[str, Any]] = []
         self.on_step = on_step
@@ -83,17 +84,15 @@ class WorkflowExecutor:
         self._trace("run.started")
 
         while len(resolved) < total:
-            runnable, executed_this_round = self._collect_runnable(resolved)
-
-            if runnable:
-                if self._concurrency_limit is not None and self._concurrency_limit > 1:
+            if self._concurrency_limit is not None and self._concurrency_limit > 1:
+                runnable, executed_this_round = self._collect_runnable(resolved)
+                if runnable:
                     self._run_parallel(runnable)
-                else:
                     for step in runnable:
-                        self._run_step(step)
-                for step in runnable:
-                    resolved.add(step.id)
-                executed_this_round = True
+                        resolved.add(step.id)
+                    executed_this_round = True
+            else:
+                executed_this_round = self._run_legacy_yaml_order(resolved)
 
             if not executed_this_round and len(resolved) < total:
                 logger.error("Deadlock detected or dependency loop in DAG execution.")
@@ -102,8 +101,31 @@ class WorkflowExecutor:
         self._trace("run.finished", status=self.overall_status)
         return self.statuses
 
+    def _run_legacy_yaml_order(self, resolved: set[str]) -> bool:
+        """Run a sequential pass that immediately exposes resolved dependencies."""
+        executed = False
+        for step in self.config.steps:
+            if self.statuses[step.id] != PENDING:
+                continue
+            if not all(dep in resolved for dep in (step.depends_on or [])):
+                continue
+            if step.condition is not None and step.condition.step not in resolved:
+                continue
+            if step.condition is not None and not step.condition.evaluate(self.results):
+                self.statuses[step.id] = SKIPPED
+                resolved.add(step.id)
+                executed = True
+                logger.info(f"Step {step.id} SKIPPED (condition not met)")
+                self._trace("step.skipped", step)
+                self._emit(step)
+                continue
+            self._run_step(step)
+            resolved.add(step.id)
+            executed = True
+        return executed
+
     def _collect_runnable(self, resolved: set[str]) -> tuple[List[StepConfig], bool]:
-        """Resolve false branches and collect one ready DAG layer."""
+        """Resolve false branches and collect one ready layer for parallel runs."""
         runnable: List[StepConfig] = []
         skipped = False
         for step in self.config.steps:
@@ -134,10 +156,10 @@ class WorkflowExecutor:
         self._trace(
             "step.completed" if succeeded else "step.failed",
             step,
-            attempt=self.retry_counts[step.id] or None,
+            attempt=self._attempt_counts[step.id] or None,
         )
         if not succeeded:
-            self._trace("dlq.recorded", step, attempt=self.retry_counts[step.id])
+            self._trace("dlq.recorded", step, attempt=self._attempt_counts[step.id])
         self._emit(step)
 
     def _run_parallel(self, steps: List[StepConfig]) -> None:
@@ -166,10 +188,10 @@ class WorkflowExecutor:
             self._trace(
                 "step.completed" if succeeded else "step.failed",
                 step,
-                attempt=self.retry_counts[step.id] or None,
+                attempt=self._attempt_counts[step.id] or None,
             )
             if not succeeded:
-                self._trace("dlq.recorded", step, attempt=self.retry_counts[step.id])
+                self._trace("dlq.recorded", step, attempt=self._attempt_counts[step.id])
             self._emit(step)
 
     def _emit(self, step: StepConfig) -> None:
@@ -196,6 +218,7 @@ class WorkflowExecutor:
         max_retries = step.retries
         last_error = ""
         for attempt in range(max_retries + 1):
+            self._attempt_counts[step.id] = attempt + 1
             try:
                 if self._typed_io:
                     res = (

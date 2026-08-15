@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 
 @dataclass(frozen=True)
 class ExecutionEvent:
+    """One deterministic event; ``attempt`` is the actual task invocation number."""
+
     sequence: int
     kind: str
     trigger_id: Optional[str] = None

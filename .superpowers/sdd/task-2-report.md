@@ -77,3 +77,46 @@ adapter, FastAPI authorization/rate-limit/HMAC enforcement, tenant model,
 external notifications, hosted scheduler, or distributed Celery fan-out was
 added. The new interfaces are intentionally injection points for that later
 integration work.
+
+## Review-fix follow-up
+
+The review findings against `54d1ed6` were corrected without expanding the
+Task 2 boundary:
+
+- The legacy execution path now runs a sequential YAML pass whenever
+  `concurrency_limit` is omitted or `1`. It resolves each completed dependency
+  immediately, preserving `A, C (depends_on A), B` order. Ready-step batching
+  is used only for an explicit limit greater than `1`.
+- `ExecutionEvent.attempt` keeps its existing public name and consistently
+  records the actual execution attempt for terminal step and DLQ events. A
+  retry after failed attempt `1` that succeeds on execution `2` consequently
+  emits `step.retry` with `1` and `step.completed` with `2`.
+- `AGENTS.md` now lists the workflow-owned Task 2 core modules and explicitly
+  assigns FastAPI API/DB route wiring, persistence adapters, and migrations to
+  Task 3.
+
+### TDD evidence
+
+Before production edits, the focused test command below failed with both
+intended regressions: default execution produced `['A', 'B', 'C']` instead of
+`['A', 'C', 'B']`, and a retry-success trace reported `step.completed` attempt
+`1` instead of actual execution attempt `2`.
+
+| Command | Result |
+| --- | --- |
+| `python -m pytest tests/test_workflow_core.py -q -k "default_execution_preserves_legacy_yaml_order_after_dependency_resolution or retry_trace_attempt_is_the_actual_execution_attempt"` | RED: 2 failed (expected) |
+| Same focused command after the executor fix | 2 passed, 16 deselected |
+| `python -m pytest tests/test_workflow_core.py -q` | 18 passed |
+| `python -m pytest -q -k "not self_containment"` | 140 passed, 3 deselected |
+| `python -m ruff check src/workflow_engine tests` | passed |
+| `python -m ruff format --check src/workflow_engine tests` | 51 files already formatted |
+| `git diff --check` | passed (Git emitted only LF-to-CRLF notices) |
+
+### Self-review
+
+Confirmed the sequential branch retains the original immediate-resolution
+behavior for both default and `concurrency_limit=1`, while the bounded
+thread-pool path is unreachable without `concurrency_limit > 1`. The trace
+field name and all existing public fields are retained; only its terminal-event
+value now reflects the actual task invocation count. No FastAPI routes,
+database adapters/migrations, or worker/beat application wiring were added.
