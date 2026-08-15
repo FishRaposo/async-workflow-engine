@@ -18,7 +18,7 @@ Run from within `async-workflow-engine/` (use the venv's python):
 ```bash
 make install          # python -m pip install -e ".[dev]"
 make dev              # uvicorn (src/workflow_engine/main.py:main)
-make test             # pytest (161 tests, no network/DB/broker needed)
+make test             # pytest (163 tests, no network/DB/broker needed)
 make lint             # ruff check src/workflow_engine tests examples alembic
 make format           # ruff format ...
 make typecheck        # pyright src/
@@ -125,7 +125,7 @@ idempotency records, and execution events.
 `tests/` — parser, executor, tasks, scheduler, webhooks, dag, runner (in-memory +
 SQLite via the vendored `MockDatabase`), both storage backends, db probe,
 Celery worker (eager, no broker), every API endpoint (success + error), models,
-an Alembic SQLite upgrade, and a demo smoke test. 161 tests, all offline.
+an Alembic SQLite upgrade, and a demo smoke test. 163 tests, all offline.
 
 ## When to Update This File
 

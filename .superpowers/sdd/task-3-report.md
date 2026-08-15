@@ -28,8 +28,8 @@ idempotency, and a real Alembic SQLite migration execution.
 
 ## Verification
 
-- `python -m pytest tests/test_task3_integration.py -q` — 18 passed
-- `python -m pytest -q` — 161 passed
+- `python -m pytest tests/test_task3_integration.py -q` — 20 passed
+- `python -m pytest -q` — 163 passed
 - `python -m ruff check src/workflow_engine tests examples alembic` — passed
 - `python -m ruff format --check src/workflow_engine tests alembic` — passed
 - `git diff --check` — passed
@@ -57,7 +57,7 @@ remain out of scope and disabled.
   `WORKFLOW_REDIS_LOCKING_ENABLED`, and otherwise remains in-memory/offline.
 - The dashboard fixture contract now includes optional version hash and ordered
   execution events, with an isolated frontend Vitest assertion.
-- `AGENTS.md` now reports the current 161 backend tests and documents the
+- `AGENTS.md` now reports the current 163 backend tests and documents the
   process-stable offline store, opt-in Redis lock, and executed Alembic check.
 
 ### TDD and verification evidence
@@ -67,8 +67,8 @@ remain out of scope and disabled.
   envelopes, and Redis manager adapter), 4 passed, and 1 setup error because the
   requested base-temp parent did not exist. The command was rerun without that
   invalid base-temp after implementation.
-- GREEN: `python -m pytest tests/test_task3_integration.py -q` — 18 passed.
-- Full backend: `python -m pytest -q` — 161 passed.
+- GREEN: `python -m pytest tests/test_task3_integration.py -q` — 20 passed.
+- Full backend: `python -m pytest -q` — 163 passed.
 - Backend quality: `python -m ruff check src/workflow_engine tests examples alembic`
   — passed; `python -m ruff format --check src/workflow_engine tests alembic`
   — 57 files already formatted; `git diff --check` — passed.
@@ -79,3 +79,23 @@ remain out of scope and disabled.
 - `python -m pyright src/` still reports 16 known pre-existing errors in
   executor, scheduler, vendored `vendor_core/llm.py`, and the pre-existing
   FastAPI exception-handler variance; the earlier new lock-adapter error is gone.
+
+### Follow-up review fixes
+
+- `RedisLockProvider` now assigns a UUID owner token to every successful
+  acquire and uses Redis Lua compare-and-delete on release. A fake-client
+  regression simulates TTL expiry and a second acquisition, proving the old
+  owner cannot remove the new owner lock.
+- The workflow-run idempotency claim now executes inside the route's protected
+  persistence path, so a durable claim failure returns the compatible 503
+  `persistence_failed` envelope rather than an unhandled 500.
+- RED: `python -m pytest tests/test_task3_integration.py -q` — 2 failed,
+  18 passed (constant Redis owner token and idempotency claim outside the
+  handler boundary).
+- GREEN: `python -m pytest tests/test_task3_integration.py -q` — 20 passed.
+- Full regression: `python -m pytest -q` — 163 passed. Ruff check and format,
+  plus `git diff --check`, passed; Pyright remains at the same 16 pre-existing
+  errors.
+- Self-review: confirmed each acquire captures its own token, release is atomic
+  compare-and-delete, the default remains in-memory/no-Redis, and the idempotency
+  failure is caught by the existing compatible persistence envelope.

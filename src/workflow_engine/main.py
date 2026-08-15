@@ -288,8 +288,8 @@ def validate_workflow(payload: WorkflowPayload, request: Request):
 @app.post("/workflows/run")
 def run_workflow_endpoint(payload: WorkflowPayload, request: Request):
     _check_access(request, Role.OPERATOR)
-    _claim_idempotency("workflow:run", request.headers.get("Idempotency-Key"))
     try:
+        _claim_idempotency("workflow:run", request.headers.get("Idempotency-Key"))
         return _dispatch(payload.yaml_definition, force_async=payload.async_dispatch)
     except (WorkflowValidationError, ValueError) as exc:
         _raise(422, str(exc), "validation_failed")

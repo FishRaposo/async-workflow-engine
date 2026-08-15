@@ -280,6 +280,49 @@ def test_redis_lock_adapter_uses_vendored_manager_client():
     assert manager.client.get("workflow:one") is None
 
 
+def test_redis_lock_adapter_does_not_release_a_reacquired_owner_lock():
+    from workflow_engine.locks import RedisLockProvider
+
+    manager = SimpleNamespace(client=MockRedisClient())
+    provider = RedisLockProvider.from_manager(manager)
+    old_context = provider.acquire("workflow:one")
+    assert old_context.__enter__() is True
+    old_token = manager.client.get("workflow:one")
+
+    # Model expiry followed by a separate process acquiring the same key.
+    manager.client.delete("workflow:one")
+    new_context = provider.acquire("workflow:one")
+    assert new_context.__enter__() is True
+    new_token = manager.client.get("workflow:one")
+
+    assert old_token != new_token
+    old_context.__exit__(None, None, None)
+    assert manager.client.get("workflow:one") == new_token
+    new_context.__exit__(None, None, None)
+    assert manager.client.get("workflow:one") is None
+
+
+def test_workflow_idempotency_persistence_failure_uses_compatible_envelope(
+    client, monkeypatch
+):
+    test_client, services = client
+
+    monkeypatch.setattr(
+        services.idempotency,
+        "claim",
+        MagicMock(side_effect=SQLAlchemyError("database unavailable")),
+    )
+    response = test_client.post(
+        "/workflows/run",
+        json={"yaml_definition": LINEAR},
+        headers={"Idempotency-Key": "once"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "persistence_failed"
+    assert response.json()["detail"].startswith("Persistence failed:")
+
+
 def test_alembic_upgrade_creates_task3_tables(tmp_path, monkeypatch):
     database_url = f"sqlite:///{tmp_path / 'runtime.db'}"
     monkeypatch.setenv("DATABASE_URL", database_url)

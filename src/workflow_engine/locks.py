@@ -5,6 +5,15 @@ from __future__ import annotations
 from contextlib import contextmanager
 from threading import Lock
 from typing import Any, Iterator, Protocol
+from uuid import uuid4
+
+_RELEASE_IF_OWNER = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+"""
 
 
 class LockProvider(Protocol):
@@ -44,9 +53,10 @@ class RedisLockProvider:
 
     @contextmanager
     def acquire(self, key: str, *, ttl_seconds: int = 60) -> Iterator[bool]:
-        acquired = bool(self.client.set(key, "1", nx=True, ex=ttl_seconds))
+        owner_token = str(uuid4())
+        acquired = bool(self.client.set(key, owner_token, nx=True, ex=ttl_seconds))
         try:
             yield acquired
         finally:
             if acquired:
-                self.client.delete(key)
+                self.client.eval(_RELEASE_IF_OWNER, 1, key, owner_token)
