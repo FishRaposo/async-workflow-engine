@@ -29,6 +29,7 @@ class InMemoryWorkflowStorage:
         dead_letters: Optional[List[Dict[str, Any]]] = None,
         task_names: Optional[Dict[str, str]] = None,
         run_id: Optional[str] = None,
+        version_hash: Optional[str] = None,
     ) -> str:
         """Persist a run and return its id. ``run_id`` may be supplied for reruns."""
         run_id = run_id or str(uuid.uuid4())
@@ -43,6 +44,7 @@ class InMemoryWorkflowStorage:
             "errors": dict(errors or {}),
             "dead_letters": list(dead_letters or []),
             "task_names": dict(task_names or {}),
+            "version_hash": version_hash,
             "created_at": now,
             "completed_at": now,
         }

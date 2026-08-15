@@ -76,11 +76,15 @@ startup (`probe_database`) to select the storage backend. Routes:
 | `storage_db.py` | `DatabaseWorkflowStorage` (SQLAlchemy, default) |
 | `models.py` | `WorkflowRun` (+ `dead_letters` JSON), `StepExecution` |
 | `worker.py` | Celery app + `run_workflow_task`, `run_due_schedules` (importable w/o broker) |
+| `runtime.py` | Shared offline/durable schedule, webhook, version, idempotency, and event adapters |
+| `trace_store.py` | In-memory execution-event adapter and API event serialization |
 | `config.py` | `AppConfig(BaseAppConfig)` |
 | `errors.py` | Re-exports `application_error_handler` |
 | `internal/vendor_core/` | Package-private v1.3.0 infrastructure import closure; see `THIRD_PARTY_NOTICES.md` |
 
-`alembic/versions/0001_initial_schema.py` creates both tables.
+`alembic/versions/0001_initial_schema.py` creates run/step tables;
+`0002_runtime_persistence.py` adds pinned definitions, schedules, webhooks,
+idempotency records, and execution events.
 
 ## Key Behaviors / Gotchas
 
@@ -100,6 +104,11 @@ startup (`probe_database`) to select the storage backend. Routes:
   trace, locks, auth/rate-limit primitives, version store, and in-memory
   schedule/webhook adapters are direct interfaces only. **Task 3 owns FastAPI
   route wiring and database persistence/migrations for those capabilities.**
+- **Task 3 runtime integration**: normal API/worker runs store deterministic
+  version hashes and ordered traces; reruns use the recorded version when present.
+  Schedule/webhook registries are shared in memory offline and use SQLAlchemy
+  adapters after the database probe. HMAC secrets, idempotency headers, API-key
+  roles, rate limits, and execution locks are disabled unless configured.
 
 ## Docker Services (`docker-compose.yml`)
 

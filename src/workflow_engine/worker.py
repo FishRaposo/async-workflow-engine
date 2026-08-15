@@ -15,10 +15,10 @@ from loguru import logger
 from workflow_engine.internal.vendor_core.tasks import create_celery_app
 
 from .config import AppConfig
-from .contracts import InMemoryIdempotencyStore
 from .db import get_storage, probe_database
 from .runner import run_workflow
-from .scheduler import WorkflowScheduler
+from .runtime import get_runtime_services
+from .trace import TraceContext
 
 config = AppConfig()
 celery_app = create_celery_app(
@@ -26,8 +26,9 @@ celery_app = create_celery_app(
     broker_url=config.CELERY_BROKER_URL,
     backend_url=config.CELERY_RESULT_BACKEND,
 )
-beat_scheduler = WorkflowScheduler()
-beat_idempotency = InMemoryIdempotencyStore()
+beat_services = get_runtime_services()
+beat_scheduler = beat_services.scheduler
+beat_idempotency = beat_services.idempotency
 
 
 def _celery_beat_enabled() -> bool:
@@ -37,7 +38,14 @@ def _celery_beat_enabled() -> bool:
 def _run_due_definition(yaml_definition: str) -> Dict[str, Any]:
     """Local due-run dispatch used by the optional beat task."""
     probe_database(config)
-    return run_workflow(yaml_definition, get_storage(config))
+    services = get_runtime_services()
+    return run_workflow(
+        yaml_definition,
+        get_storage(config),
+        trace=TraceContext(),
+        version_store=services.versions,
+        event_store=services.events,
+    )
 
 
 @celery_app.task(name="workflow_engine.run_workflow", bind=True, max_retries=2)
@@ -45,6 +53,7 @@ def run_workflow_task(
     self: Any,
     yaml_definition: str,
     run_id: Optional[str] = None,
+    version_hash: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute a workflow in the background and persist the result.
 
@@ -54,8 +63,19 @@ def run_workflow_task(
     logger.info("Worker received workflow dispatch")
     probe_database(config)
     storage = get_storage(config)
+    services = get_runtime_services()
     try:
-        return run_workflow(yaml_definition, storage, run_id=run_id)
+        if version_hash is not None and services.versions.get(version_hash) is None:
+            services.versions.put(yaml_definition)
+        return run_workflow(
+            yaml_definition,
+            storage,
+            run_id=run_id,
+            trace=TraceContext(run_id=run_id),
+            version_store=services.versions,
+            version_hash=version_hash,
+            event_store=services.events,
+        )
     except Exception as exc:  # pragma: no cover - retry path needs a live broker
         logger.error(f"Worker workflow execution failed: {exc}")
         raise self.retry(exc=exc, countdown=2) from exc
@@ -71,8 +91,9 @@ def run_due_schedules() -> Dict[str, Any]:
     if not _celery_beat_enabled():
         logger.info("run_due_schedules tick skipped (Celery beat disabled)")
         return {"dispatched": []}
+    active_services = get_runtime_services()
     return {
-        "dispatched": beat_scheduler.dispatch_due(
-            _run_due_definition, idempotency=beat_idempotency
+        "dispatched": active_services.scheduler.dispatch_due(
+            _run_due_definition, idempotency=active_services.idempotency
         )
     }

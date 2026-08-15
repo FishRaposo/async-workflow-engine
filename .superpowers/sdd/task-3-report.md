@@ -1,0 +1,44 @@
+# Task 3 Finalization Report
+
+## Scope completed
+
+- Wired the Task 2 runtime contracts through the existing FastAPI routes without
+  removing routes, response keys, status values, YAML semantics, retry/DLQ/rerun
+  behavior, or the static dead-letters route ordering.
+- Added offline-default runtime services and optional SQLAlchemy stores for
+  schedules, webhooks (including optional HMAC secret), deterministic workflow
+  definitions, idempotency claims, and ordered execution events.
+- Persisted workflow version hashes and traces for normal API/worker runs; reruns
+  resolve a recorded version hash when one exists.
+- Added a backward-compatible error envelope (`detail` remains present) for
+  validation, auth/role, rate-limit, lock, idempotency, persistence, dispatch,
+  and HMAC failures.
+- Kept auth, rate limiting, locking, HMAC, idempotency, asynchronous dispatch,
+  and Celery beat opt-in. Offline synchronous execution remains the default.
+- Updated the eager Celery path to use the same runtime services and added
+  migration `0002_runtime_persistence` while retaining `0001_initial`.
+
+## TDD evidence
+
+`tests/test_task3_integration.py` was added first and observed red for missing
+runtime services, version/trace metadata, HMAC/idempotency enforcement, durable
+adapters, and the migration. It is now green and covers API golden metadata,
+in-memory/SQLite adapter round trips, due-schedule dispatch, webhook HMAC,
+idempotency, and migration table declarations.
+
+## Verification
+
+- `python -m pytest tests/test_task3_integration.py -q --basetemp ...` — 5 passed
+- `python -m pytest -q --basetemp ...` — 148 passed
+- `python -m ruff check src/workflow_engine tests examples alembic` — passed
+- `python -m ruff format --check src/workflow_engine tests alembic` — passed
+- `git diff --check` — passed
+- `python -m pyright src/` — 16 pre-existing errors in executor, scheduler,
+  vendored `vendor_core/llm.py`, and the pre-existing FastAPI exception-handler
+  variance; no Task 3-specific type errors remain.
+
+## Explicitly deferred
+
+Hosted/team tenancy, external notification delivery, mandatory infrastructure,
+hosted scheduling, Redis-specific adapters, and distributed Celery fan-out remain
+out of scope and disabled.

@@ -6,6 +6,7 @@ persists the result (run record, per-step statuses, errors, and the dead-letter
 queue) through whichever storage backend is active.
 """
 
+import uuid
 from typing import Any, Dict, Optional
 
 from loguru import logger
@@ -14,6 +15,7 @@ from .executor import WorkflowExecutor
 from .parser import WorkflowConfig, load_workflow_yaml
 from .tasks import TASK_REGISTRY
 from .trace import TraceContext
+from .trace_store import event_payload
 from .versions import WorkflowVersionStore
 
 
@@ -48,11 +50,16 @@ def run_workflow(
     trace: Optional[TraceContext] = None,
     version_store: Optional[WorkflowVersionStore] = None,
     version_hash: Optional[str] = None,
+    event_store: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Parse, execute, and persist a workflow run; return a result dict.
 
     Passing ``run_id`` reuses an id (used by rerun to overwrite a prior run).
     """
+    if trace is not None and trace.run_id is None:
+        trace.run_id = run_id or str(uuid.uuid4())
+    if trace is not None and run_id is None:
+        run_id = trace.run_id
     if version_hash is not None:
         if version_store is None:
             raise ValueError("version_hash requires a workflow version store")
@@ -83,6 +90,7 @@ def run_workflow(
         dead_letters=executor.dead_letters,
         task_names=task_names,
         run_id=run_id,
+        version_hash=version.content_hash if version is not None else version_hash,
     )
     logger.info(
         f"Workflow '{config.name}' run {saved_id} finished: {executor.overall_status}"
@@ -98,4 +106,9 @@ def run_workflow(
     }
     if version is not None:
         result["version_hash"] = version.content_hash
+    if trace is not None:
+        events = [event_payload(event) for event in trace.events]
+        if event_store is not None:
+            event_store.save(saved_id, events)
+        result["events"] = events
     return result
