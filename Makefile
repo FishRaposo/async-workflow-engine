@@ -22,14 +22,14 @@ typecheck:
 	python -m pyright src/
 
 package-check:
-	python scripts/check_package.py
+	python -m scripts.check_package
 
 migration-check:
-	python scripts/check_sqlite_migrations.py
+	python -m scripts.check_sqlite_migrations
 
 evidence-check:
-	python scripts/portfolio_demo.py
-	python scripts/verify_portfolio_evidence.py artifacts/portfolio/async-workflow-engine-evidence
+	python -m scripts.portfolio_demo
+	python -m scripts.verify_portfolio_evidence artifacts/portfolio/async-workflow-engine-evidence
 
 docker-config:
 	docker compose config

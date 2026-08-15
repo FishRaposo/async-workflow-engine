@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,15 +16,25 @@ DEFAULT_PATHS = (
     "scripts",
     "src",
     "frontend/.env.example",
+    "frontend/.dockerignore",
+    "frontend/.gitignore",
+    "frontend/.eslintrc.json",
     "frontend/Dockerfile",
     "frontend/next.config.js",
     "frontend/package.json",
     "frontend/playwright.config.ts",
+    "frontend/postcss.config.js",
     "frontend/src",
+    "frontend/tailwind.config.ts",
+    "frontend/tsconfig.json",
     "frontend/vitest.config.ts",
     "docker-compose.yml",
     "Makefile",
     "pyproject.toml",
+)
+TRACKED_ENVIRONMENT_PATHS = (
+    ":(glob).env*",
+    ":(glob)frontend/.env*",
 )
 PATTERNS = {
     "retired shared_core dependency": re.compile(
@@ -48,7 +59,29 @@ def _files(root: Path) -> list[Path]:
             files.append(candidate)
         elif candidate.is_dir():
             files.extend(path for path in candidate.rglob("*") if path.is_file())
-    return sorted(files)
+    files.extend(_tracked_environment_files(root))
+    return sorted(set(files))
+
+
+def _tracked_environment_files(root: Path) -> list[Path]:
+    """Return tracked environment files without scanning ignored local credentials."""
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "ls-files",
+            "--cached",
+            "--",
+            *TRACKED_ENVIRONMENT_PATHS,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+    return [root / line for line in result.stdout.splitlines() if line]
 
 
 def find_violations(root: Path) -> list[str]:
@@ -61,7 +94,7 @@ def find_violations(root: Path) -> list[str]:
             continue
         for label, pattern in PATTERNS.items():
             if pattern.search(contents):
-                violations.append(f"{path.relative_to(root)}: {label}")
+                violations.append(f"{path.relative_to(root).as_posix()}: {label}")
     return violations
 
 
