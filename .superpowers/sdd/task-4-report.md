@@ -106,3 +106,21 @@
   by `python scripts/verify_portfolio_evidence.py
   artifacts/portfolio/async-workflow-engine-evidence`, passed with identical
   hash `7a2584c22d4d91fbf9368194d068e94ced6dd149f87aa72e46f88f4dc4581029`.
+
+## Canonical-checksum review fix
+
+- Root cause: `checksums.sha256` was semantically parsed with `splitlines()`;
+  reordered valid entries and CRLF line endings survived checksum validation.
+  On Windows, the generator's `write_text` also emitted CRLF by default.
+- RED: a canonical-byte generator assertion plus self-consistent reordered and
+  CRLF checksum regressions failed as intended under the prior implementation:
+  3 failures / 14 passes (17 collected).
+- Fix: the generator writes checksum bytes as explicit UTF-8 with LF endings;
+  the verifier requires the exact canonical checksum byte sequence in the fixed
+  order `evidence.json`, `manifest.json`, `report.md`, with one trailing LF.
+- GREEN: `python -m pytest tests/test_portfolio_evidence.py -q` — 17 passed.
+- Full regression: `python -m pytest -q` — 180 passed.
+- Style: `python -m ruff check scripts tests/test_portfolio_evidence.py` and
+  `python -m ruff format --check scripts tests/test_portfolio_evidence.py` — passed.
+- Reproducibility: two regenerated-and-verified evidence runs passed with the
+  unchanged hash `7a2584c22d4d91fbf9368194d068e94ced6dd149f87aa72e46f88f4dc4581029`.

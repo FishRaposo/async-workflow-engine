@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 REQUIRED_FILES = {"checksums.sha256", "evidence.json", "manifest.json", "report.md"}
+ARTIFACT_FILES = ("evidence.json", "manifest.json", "report.md")
 
 
 class EvidenceVerificationError(ValueError):
@@ -21,6 +22,16 @@ def _sha256(path: Path) -> str:
 def _canonical_json(value: dict[str, Any]) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def _canonical_checksums(directory: Path) -> bytes:
+    return (
+        "\n".join(
+            f"{_sha256(directory / filename)}  {filename}"
+            for filename in ARTIFACT_FILES
+        )
+        + "\n"
     ).encode("utf-8")
 
 
@@ -97,6 +108,8 @@ def verify_evidence(output_dir: str | Path) -> dict[str, Any]:
     for filename, expected in checksums.items():
         if _sha256(directory / filename) != expected:
             raise EvidenceVerificationError(f"Checksum mismatch: {filename}")
+    if (directory / "checksums.sha256").read_bytes() != _canonical_checksums(directory):
+        raise EvidenceVerificationError("checksums.sha256 is not canonical")
 
     canonical_evidence = _canonical_json(golden)
     if (directory / "evidence.json").read_bytes() != canonical_evidence + b"\n":
@@ -105,7 +118,7 @@ def verify_evidence(output_dir: str | Path) -> dict[str, Any]:
         )
     reproducibility_hash = hashlib.sha256(canonical_evidence).hexdigest()
     expected_manifest = {
-        "artifact_files": sorted(REQUIRED_FILES - {"checksums.sha256"}),
+        "artifact_files": list(ARTIFACT_FILES),
         "reproducibility_hash": reproducibility_hash,
         "schema_version": 1,
     }

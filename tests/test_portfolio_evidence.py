@@ -27,14 +27,18 @@ def _evidence_modules():
     return demo, verifier
 
 
-def _rewrite_checksums(output: Path) -> None:
-    (output / "checksums.sha256").write_text(
+def _canonical_checksums(output: Path) -> bytes:
+    return (
         "\n".join(
             f"{hashlib.sha256((output / name).read_bytes()).hexdigest()}  {name}"
             for name in ("evidence.json", "manifest.json", "report.md")
         )
         + "\n"
-    )
+    ).encode("utf-8")
+
+
+def _rewrite_checksums(output: Path) -> None:
+    (output / "checksums.sha256").write_bytes(_canonical_checksums(output))
 
 
 def test_generator_is_reproducible_and_exercises_real_offline_capabilities(tmp_path):
@@ -47,6 +51,9 @@ def test_generator_is_reproducible_and_exercises_real_offline_capabilities(tmp_p
         verifier.verify_evidence(tmp_path / "first")["reproducibility_hash"]
         == first["reproducibility_hash"]
     )
+    assert (
+        tmp_path / "first" / "checksums.sha256"
+    ).read_bytes() == _canonical_checksums(tmp_path / "first")
     report = json.loads((tmp_path / "first" / "evidence.json").read_text())
     assert report["validation"]["cycle_refused"] is True
     assert report["validation"]["unknown_task_refused"] is True
@@ -127,13 +134,7 @@ def test_verifier_rejects_a_self_consistent_but_non_golden_evidence_bundle(tmp_p
     (output / "report.md").write_text(
         f"# altered\n\nReproducibility hash: `{manifest['reproducibility_hash']}`\n"
     )
-    (output / "checksums.sha256").write_text(
-        "\n".join(
-            f"{hashlib.sha256((output / name).read_bytes()).hexdigest()}  {name}"
-            for name in ("evidence.json", "manifest.json", "report.md")
-        )
-        + "\n"
-    )
+    _rewrite_checksums(output)
 
     with pytest.raises(verifier.EvidenceVerificationError):
         verifier.verify_evidence(output)
@@ -147,13 +148,7 @@ def test_verifier_rejects_a_self_consistent_tampered_manifest(tmp_path):
     (output / "manifest.json").write_text(
         json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n"
     )
-    (output / "checksums.sha256").write_text(
-        "\n".join(
-            f"{hashlib.sha256((output / name).read_bytes()).hexdigest()}  {name}"
-            for name in ("evidence.json", "manifest.json", "report.md")
-        )
-        + "\n"
-    )
+    _rewrite_checksums(output)
 
     with pytest.raises(verifier.EvidenceVerificationError):
         verifier.verify_evidence(output)
@@ -184,6 +179,24 @@ def test_verifier_rejects_json_without_the_canonical_trailing_newline(
     demo.generate_evidence(output)
     (output / filename).write_bytes((output / filename).read_bytes().rstrip(b"\n"))
     _rewrite_checksums(output)
+
+    with pytest.raises(verifier.EvidenceVerificationError):
+        verifier.verify_evidence(output)
+
+
+@pytest.mark.parametrize("mutation", ["reordered", "crlf"])
+def test_verifier_rejects_self_consistent_noncanonical_checksum_bytes(
+    tmp_path, mutation
+):
+    demo, verifier = _evidence_modules()
+    output = tmp_path / mutation
+    demo.generate_evidence(output)
+    checksums = _canonical_checksums(output)
+    if mutation == "reordered":
+        lines = checksums.splitlines()
+        (output / "checksums.sha256").write_bytes(b"\n".join(reversed(lines)) + b"\n")
+    else:
+        (output / "checksums.sha256").write_bytes(checksums.replace(b"\n", b"\r\n"))
 
     with pytest.raises(verifier.EvidenceVerificationError):
         verifier.verify_evidence(output)

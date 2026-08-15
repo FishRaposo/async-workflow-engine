@@ -395,7 +395,7 @@ def generate_evidence(output_dir: str | Path) -> dict[str, Any]:
         f"{_sha256(directory / filename)}  {filename}"
         for filename in ("evidence.json", "manifest.json", "report.md")
     )
-    (directory / "checksums.sha256").write_text(checksums + "\n", encoding="utf-8")
+    (directory / "checksums.sha256").write_bytes((checksums + "\n").encode("utf-8"))
     return manifest
 
 
